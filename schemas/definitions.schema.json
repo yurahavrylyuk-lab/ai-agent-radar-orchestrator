@@ -1,0 +1,11 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "definitions.schema.json",
+  "$defs": {
+    "nonEmptyString": { "type": "string", "minLength": 1 },
+    "timestamp": { "type": "string", "format": "date-time" },
+    "identifier": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$" },
+    "reviewState": { "enum": ["NOT_STARTED", "IN_REVIEW", "PASS", "PASS_WITH_RECOMMENDATIONS", "REVISE", "REJECT", "HUMAN_REVIEW_REQUIRED"] },
+    "cycleState": { "enum": ["QUEUED", "ACTIVE", "AWAITING_HUMAN_ROLE", "REVIEW", "ACCEPTED", "REJECTED", "ESCALATED", "HALTED"] }
+  }
+}

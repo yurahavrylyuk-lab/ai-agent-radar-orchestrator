@@ -1,0 +1,7 @@
+{
+  "count": 32,
+  "scope": "SIMULATED OFFLINE CONTROLLER",
+  "cases": [
+    "strict schemas", "unknown fields", "cross-record validation", "single admission", "illegal transition", "iteration cap", "quota refusal", "offline rendering", "paid refusal", "no fallback", "priority queue", "no catch-up", "ownership fencing", "human hold", "atomic replacement", "process lock", "fault recovery", "review atomicity", "path allowlist", "path protections", "filesystem prohibitions", "terminal summaries", "iteration summaries", "audit idempotence", "event deduplication", "conflicting events", "notification failure", "review target", "uncertain completion", "time accounting", "retention", "OS network denial"
+  ]
+}

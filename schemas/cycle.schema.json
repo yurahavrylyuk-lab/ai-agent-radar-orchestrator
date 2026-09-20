@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "cycle.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id", "requestId", "status", "planRevision", "baseline", "iterationIds", "activeMs", "humanWaitingMs", "liveOperationsEnabled"],
+  "properties": {
+    "id": { "type": "string", "minLength": 1 }, "requestId": { "type": "string", "minLength": 1 },
+    "status": { "enum": ["QUEUED", "ACTIVE", "AWAITING_HUMAN_ROLE", "REVIEW", "ACCEPTED", "REJECTED", "ESCALATED", "HALTED"] },
+    "planRevision": { "type": "integer", "minimum": 1 }, "baseline": { "type": "string", "minLength": 1 },
+    "iterationIds": { "type": "array", "items": { "type": "string" }, "uniqueItems": true },
+    "activeMs": { "type": "integer", "minimum": 0 }, "humanWaitingMs": { "type": "integer", "minimum": 0 },
+    "liveOperationsEnabled": { "const": false }
+  }
+}

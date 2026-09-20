@@ -1,0 +1,24 @@
+{
+  "zeroAdditionalPaidSpend": true,
+  "liveOperationsEnabled": false,
+  "schedulingEnabled": false,
+  "schedule": "0 8 * * 1,3,5",
+  "roles": {
+    "architect": { "model": "Astra", "effort": "High" },
+    "builder": { "model": "Sol", "effort": "Medium" },
+    "analyst": { "model": "Terra", "effort": "High" }
+  },
+  "modelFallback": false,
+  "maxIterations": 3,
+  "maxRoleExecutionMinutes": 15,
+  "maxCycleActiveMinutes": 90,
+  "maxActiveCycles": 1,
+  "authoritativeControllers": 1,
+  "targetPathAllowlist": [
+    "docs/learning/**/*.md",
+    "test/offline/**/*.test.mjs",
+    "test/fixtures/offline/**/*.json",
+    "test/fixtures/offline/**/*.txt",
+    "test/fixtures/offline/**/*.md"
+  ]
+}

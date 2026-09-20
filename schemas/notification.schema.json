@@ -1,0 +1,5 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema", "$id": "notification.schema.json", "type": "object", "additionalProperties": false,
+  "required": ["eventId", "payloadHash", "status", "createdAt"],
+  "properties": { "eventId": { "type": "string", "minLength": 1 }, "payloadHash": { "type": "string", "minLength": 1 }, "status": { "enum": ["PENDING", "SENT", "FAILED"] }, "createdAt": { "type": "string", "minLength": 1 } }
+}

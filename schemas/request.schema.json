@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "request.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id", "source", "createdAt", "priority", "payload"],
+  "properties": {
+    "id": { "type": "string", "minLength": 1 },
+    "source": { "enum": ["HUMAN", "SCHEDULED"] },
+    "createdAt": { "type": "string", "minLength": 1 },
+    "priority": { "type": "integer", "minimum": 0 },
+    "scheduledFor": { "type": "string", "minLength": 1 },
+    "payload": { "type": "object" }
+  }
+}

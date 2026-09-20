@@ -1,0 +1,5 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema", "$id": "role-result.schema.json", "type": "object", "additionalProperties": false,
+  "required": ["role", "status", "model", "startedAt", "finishedAt", "activeMs", "simulated"],
+  "properties": { "role": { "enum": ["architect", "builder", "analyst"] }, "status": { "type": "string", "minLength": 1 }, "model": { "enum": ["Astra High", "Sol Medium", "Terra High"] }, "startedAt": { "type": "string", "minLength": 1 }, "finishedAt": { "type": ["string", "null"] }, "activeMs": { "type": "integer", "minimum": 0, "maximum": 900000 }, "simulated": { "const": true } }
+}

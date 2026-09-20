@@ -1,0 +1,5 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema", "$id": "summary.schema.json", "type": "object", "additionalProperties": false,
+  "required": ["cycleId", "status", "iterationCount", "message", "createdAt", "simulated"],
+  "properties": { "cycleId": { "type": "string", "minLength": 1 }, "status": { "enum": ["QUEUED", "ACTIVE", "AWAITING_HUMAN_ROLE", "REVIEW", "ACCEPTED", "REJECTED", "ESCALATED", "HALTED"] }, "iterationCount": { "type": "integer", "minimum": 0, "maximum": 3 }, "message": { "type": "string", "minLength": 1 }, "createdAt": { "type": "string", "minLength": 1 }, "simulated": { "const": true } }
+}

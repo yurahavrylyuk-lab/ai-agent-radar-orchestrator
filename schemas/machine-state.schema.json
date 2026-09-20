@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "machine-state.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "controllerId", "stateVersion", "owner", "activeCycleId", "humanHold", "queue"],
+  "properties": {
+    "schemaVersion": { "type": "integer", "minimum": 1 },
+    "controllerId": { "type": "string", "minLength": 1 },
+    "stateVersion": { "type": "integer", "minimum": 0 },
+    "owner": { "type": "object", "additionalProperties": false, "required": ["id", "generation"], "properties": { "id": { "type": "string", "minLength": 1 }, "generation": { "type": "integer", "minimum": 1 } } },
+    "activeCycleId": { "type": ["string", "null"] },
+    "humanHold": { "type": "boolean" },
+    "queue": { "type": "array", "items": { "$ref": "request.schema.json" } }
+  }
+}

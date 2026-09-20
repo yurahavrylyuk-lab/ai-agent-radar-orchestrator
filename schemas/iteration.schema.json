@@ -1,0 +1,11 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema", "$id": "iteration.schema.json", "type": "object", "additionalProperties": false,
+  "required": ["id", "cycleId", "index", "planRevision", "builderCommit", "reviewState", "createdAt"],
+  "properties": {
+    "id": { "type": "string", "minLength": 1 }, "cycleId": { "type": "string", "minLength": 1 },
+    "index": { "type": "integer", "minimum": 1, "maximum": 3 }, "planRevision": { "type": "integer", "minimum": 1 },
+    "builderCommit": { "type": "string", "minLength": 1 },
+    "reviewState": { "enum": ["NOT_STARTED", "IN_REVIEW", "PASS", "PASS_WITH_RECOMMENDATIONS", "REVISE", "REJECT", "HUMAN_REVIEW_REQUIRED"] },
+    "createdAt": { "type": "string", "minLength": 1 }
+  }
+}
