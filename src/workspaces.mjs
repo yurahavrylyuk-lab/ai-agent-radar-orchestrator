@@ -6,7 +6,7 @@ function contained(root, candidate) {
   const relative = path.relative(root, candidate); return relative !== "" && !relative.startsWith("..") && !path.isAbsolute(relative);
 }
 
-export function createIndependentWorkspace({ sourceRoot, runtimeRoot, workspaceId, commit, role }) {
+export function createIndependentWorkspace({ sourceRoot, runtimeRoot, workspaceId, commit, role, registeredAt = new Date().toISOString() }) {
   if (!/^[a-z0-9][a-z0-9._-]*$/u.test(workspaceId)) throw new Error("INVALID_WORKSPACE_ID");
   if (!['architect', 'builder', 'analyst'].includes(role)) throw new Error("INVALID_WORKSPACE_ROLE");
   const canonicalRuntime = fs.realpathSync(runtimeRoot); const workspaceRoot = path.join(canonicalRuntime, "workspaces", workspaceId);
@@ -20,7 +20,7 @@ export function createIndependentWorkspace({ sourceRoot, runtimeRoot, workspaceI
   git(workspaceRoot, ["config", "protocol.file.allow", "always"], { write: true });
   git(workspaceRoot, ["checkout", "--detach", commit], { write: true });
   if (remotes(workspaceRoot).length || alternates(workspaceRoot)) throw new Error("WORKSPACE_NOT_INDEPENDENT");
-  return Object.freeze({ workspaceId, role, root: fs.realpathSync(workspaceRoot), expectedCommit: commit, registeredAt: new Date().toISOString() });
+  return Object.freeze({ workspaceId, role, root: fs.realpathSync(workspaceRoot), expectedCommit: commit, registeredAt });
 }
 
 export function resolveRegisteredWorkspace(record, expectedRole = null) {

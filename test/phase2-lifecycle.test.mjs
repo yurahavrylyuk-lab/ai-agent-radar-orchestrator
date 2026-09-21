@@ -13,29 +13,29 @@ const submit = (statePath, result, persistenceOptions = {}) => submitRoleResult(
 test("all five Analyst outcomes produce one immutable summary and deterministic next state", () => {
   const expectations = { PASS: ["ARCHITECT_FINAL_DECISION", false], PASS_WITH_RECOMMENDATIONS: ["ARCHITECT_FINAL_DECISION", false], REVISE: ["ARCHITECT_REVISION", false], REJECT: ["ARCHITECT_FINAL_DECISION", true], HUMAN_REVIEW_REQUIRED: ["ARCHITECT_FINAL_DECISION", true] };
   for (const [reviewState, [purpose, hold]] of Object.entries(expectations)) {
-    const { statePath, task } = fixture(); submit(statePath, makeResult(task, analystPayload(OID_B, reviewState))); const state = readState(statePath);
+    const { statePath, state: initial, task } = fixture(); submit(statePath, makeResult(task, analystPayload(initial, task, reviewState))); const state = readState(statePath);
     assert.equal(state.summaries.length, 1, reviewState); assert.equal(state.reviews.length, 1); assert.equal(state.outbox.length, 1); assert.equal(state.humanHold, hold); assert.equal(state.tasks.find((item) => item.taskId === state.pendingTaskId).purpose, purpose);
   }
 });
 test("third unresolved review creates disposition task, engages hold, and never creates iteration four", () => {
-  const { statePath, task } = fixture({ iteration: 3 }); submit(statePath, makeResult(task, analystPayload(OID_B, "REVISE"))); const state = readState(statePath);
+  const { statePath, state: initial, task } = fixture({ iteration: 3 }); submit(statePath, makeResult(task, analystPayload(initial, task, "REVISE"))); const state = readState(statePath);
   assert.equal(state.humanHold, true); assert.equal(state.cycles[0].iteration, 3); assert.equal(state.tasks.at(-1).purpose, "ARCHITECT_FINAL_DECISION"); assert.equal(state.summaries.length, 1);
 });
 test("identical replay returns the original receipt without changing bytes; conflicting replay fails closed", () => {
-  const { statePath, task } = fixture(); const result = makeResult(task, analystPayload(OID_B, "PASS")); const first = submit(statePath, result).value; const bytes = fs.readFileSync(statePath);
+  const { statePath, state: initial, task } = fixture(); const result = makeResult(task, analystPayload(initial, task, "PASS")); const first = submit(statePath, result).value; const bytes = fs.readFileSync(statePath);
   const replay = submit(statePath, result).value; assert.equal(replay.receiptId, first.receiptId); assert.equal(replay.status, "IDEMPOTENT_REPLAY"); assert.deepEqual(fs.readFileSync(statePath), bytes);
   assert.throws(() => submit(statePath, { ...result, payload: { ...result.payload, recommendations: ["different"] } }), /CONFLICTING_RESULT_RESUBMISSION/); assert.deepEqual(fs.readFileSync(statePath), bytes);
 });
 test("timing updates preserve task identity, distinguish waiting/executing, and do not stale a result", () => {
-  const { statePath, task } = fixture(); const digest = task.taskDigest; startRole({ statePath, ownerId: "owner", ownerGeneration: 1, taskId: task.taskId, now: "2026-09-21T00:00:10.000Z" });
+  const { statePath, task } = fixture({ timing: false }); const digest = task.taskDigest; startRole({ statePath, ownerId: "owner", ownerGeneration: 1, taskId: task.taskId, now: "2026-09-21T00:00:10.000Z" });
   assert.equal(readState(statePath).timings[0].status, "EXECUTING"); finishRole({ statePath, ownerId: "owner", ownerGeneration: 1, taskId: task.taskId, now: "2026-09-21T00:00:20.000Z" });
-  assert.equal(readState(statePath).tasks[0].taskDigest, digest); submit(statePath, makeResult(task, analystPayload(OID_B, "PASS"))); assert.equal(readState(statePath).receipts.length, 1);
+  const state = readState(statePath); assert.equal(state.timings[0].status, "COMPLETED"); assert.equal(state.tasks[0].taskDigest, digest); submit(statePath, makeResult(task, analystPayload(state, task, "PASS"))); assert.equal(readState(statePath).receipts.length, 1);
 });
 test("role time limit creates a durable human hold", () => {
-  const { statePath, task } = fixture(); startRole({ statePath, ownerId: "owner", ownerGeneration: 1, taskId: task.taskId, now: "2026-09-21T00:00:00.000Z" }); finishRole({ statePath, ownerId: "owner", ownerGeneration: 1, taskId: task.taskId, now: "2026-09-21T00:16:00.001Z" }); assert.equal(readState(statePath).humanHold, true);
+  const { statePath, task } = fixture({ timing: false }); startRole({ statePath, ownerId: "owner", ownerGeneration: 1, taskId: task.taskId, now: "2026-09-21T00:00:00.000Z" }); finishRole({ statePath, ownerId: "owner", ownerGeneration: 1, taskId: task.taskId, now: "2026-09-21T00:16:00.001Z" }); assert.equal(readState(statePath).humanHold, true);
 });
 test("review, summary, outbox, receipt, and next task are one durable transaction", () => {
-  const { statePath, task } = fixture(); const result = makeResult(task, analystPayload(OID_B, "PASS")); const before = fs.readFileSync(statePath);
+  const { statePath, state: initial, task } = fixture(); const result = makeResult(task, analystPayload(initial, task, "PASS")); const before = fs.readFileSync(statePath);
   assert.throws(() => submit(statePath, result, { onOperation(operation) { if (operation === "temporary-write") throw new Error("INJECTED_PRE_WRITE_FAILURE"); } }), /INJECTED_PRE_WRITE_FAILURE/); assert.deepEqual(fs.readFileSync(statePath), before);
   assert.throws(() => submit(statePath, result, { failBeforeRename: true }), /INJECTED_PERSISTENCE_FAILURE/); assert.deepEqual(fs.readFileSync(statePath), before);
   assert.throws(() => submit(statePath, result, { failAfterRename: true }), /PERSISTENCE_DURABILITY_UNCERTAIN/); const after = readState(statePath); assert.deepEqual([after.reviews.length, after.summaries.length, after.outbox.length, after.receipts.length], [1, 1, 1, 1]);

@@ -26,6 +26,7 @@ export const PHASE2 = Object.freeze({
   schemaVersion: 2,
   maxIterations: 3,
   maxExecutionSeconds: 900,
+  maxCycleExecutionSeconds: 5400,
   maxAdditionalCostUsd: 0,
   realPilotActivation: false,
   pilotPath: "docs/learning/offline-fixture-reading.md",

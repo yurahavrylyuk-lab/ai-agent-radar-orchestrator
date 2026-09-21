@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { PHASE2, sha256Canonical } from "./contracts.mjs";
-import { isRealTarget, summaryDigest } from "./coordinator.mjs";
+import { finalizeTerminalCycle, isRealTarget } from "./coordinator.mjs";
 import { changedFiles, commitMetadata, currentBranch, git, resolveCommit, statusPorcelain, verifyPilotCandidate } from "./git-evidence.mjs";
 import { acquireLock, mutateStateV2, readState } from "./local-store.mjs";
 import { resolveRegisteredWorkspace } from "./workspaces.mjs";
@@ -15,6 +15,7 @@ function requireApproved(state, cycle) {
 export function integrateFixtureCandidate({ statePath, ownerId, ownerGeneration, cycleId, targetRoot, now, fixture = false, inject = null }) {
   if (!fixture || isRealTarget(targetRoot) || PHASE2.realPilotActivation) throw Object.assign(new Error("REAL_PILOT_NOT_AUTHORIZED"), { code: "REAL_PILOT_NOT_AUTHORIZED" });
   const canonicalTarget = fs.realpathSync(targetRoot); const initial = readState(statePath); const cycle = initial.cycles.find((item) => item.id === cycleId); if (!cycle) throw new Error("CYCLE_NOT_FOUND");
+  if (cycle.targetBranch !== PHASE2.pilotBranch) throw new Error("TARGET_BRANCH_NOT_AUTHORIZED");
   if (initial.integrationIntents.some((item) => item.cycleId === cycleId)) throw Object.assign(new Error("INTEGRATION_RECONCILIATION_REQUIRED"), { code: "INTEGRATION_RECONCILIATION_REQUIRED" });
   if (initial.humanHold) throw new Error("HUMAN_HOLD");
   if (canonicalTarget !== cycle.targetRoot) throw new Error("TARGET_IDENTITY_MISMATCH");
@@ -39,9 +40,8 @@ export function integrateFixtureCandidate({ statePath, ownerId, ownerGeneration,
     mutateStateV2({ statePath, ownerId, ownerGeneration, mutator(state) {
       const stored = state.integrationIntents.find((item) => item.intentId === intent.intentId); stored.status = "APPLIED";
       state.integrationOutcomes.push({ intentId: intent.intentId, cycleId, status: "INTEGRATED", oldTip: intent.oldTip, newTip: intent.newTip, verifiedAt: now });
-      const current = state.cycles.find((item) => item.id === cycleId); current.integrationStatus = "INTEGRATED"; current.status = "ACCEPTED"; current.stage = "COMPLETE"; state.activeCycleId = null; state.humanHold = false;
-      const unsigned = { id: `summary:${cycleId}:final`, cycleId, type: "FINAL", evidenceMode: state.evidenceMode, iterations: state.iterations.filter((item) => item.cycleId === cycleId).map((item) => ({ index: item.index, planRevision: item.planRevision, candidateCommit: item.candidateCommit, reviewResultDigest: item.reviewResultDigest })), planRevisions: state.plans.filter((item) => item.cycleId === cycleId).map((item) => ({ revision: item.revision, digest: item.digest })), architectDecision: current.architectDecision, architectResultDigest: current.architectResultDigest, integration: { status: "INTEGRATED", oldTip: intent.oldTip, newTip: intent.newTip, scopeDigest: intent.scopeDigest }, productionImpact: "NONE_FIXTURE_ONLY", risks: [], createdAt: now };
-      const finalSummary = { ...unsigned, digest: summaryDigest(unsigned) }; state.summaries.push(finalSummary); state.outbox.push({ id: `${state.repositoryId}:${cycleId}:${current.iteration}:final`, status: "SIMULATED_ACCEPTED", payload: { summaryId: finalSummary.id, summaryDigest: finalSummary.digest, simulated: true } }); state.stateVersion += 1; return { state, value: finalSummary };
+      const current = state.cycles.find((item) => item.id === cycleId); current.integrationStatus = "INTEGRATED";
+      const finalSummary = finalizeTerminalCycle(state, current, { status: "ACCEPTED", stage: "COMPLETE", terminalReason: "INTEGRATED", now, humanHold: false, integration: { status: "INTEGRATED", oldTip: intent.oldTip, newTip: intent.newTip, scopeDigest: intent.scopeDigest } }); state.stateVersion += 1; return { state, value: finalSummary };
     }});
     return { status: "INTEGRATED", intent, candidateCommit: cycle.candidateCommit };
   } catch (error) {

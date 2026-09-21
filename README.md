@@ -1,12 +1,12 @@
 # AI Agent Radar Offline Self-Improvement Controller
 
-This repository is a dependency-free, local-only governance controller. Phase 1 established the fail-closed offline prototype; GOV-002 Phase 2 revision 1 adds human-assisted, data-only role handoffs and trusted Git operations that are enabled only for disposable fixture repositories. It does not launch Codex, contact providers, publish Git changes, send notifications, schedule work, or activate the real pilot.
+This repository is a dependency-free, local-only governance controller. Phase 1 established the fail-closed offline prototype; GOV-002 Phase 2 adds human-assisted, data-only role handoffs and trusted Git operations that are enabled only for disposable fixture repositories. It does not launch Codex, contact providers, publish Git changes, send notifications, schedule work, or activate the real pilot.
 
 ## Phase 2 Revision 1
 
 - Accepted parent checkpoint: `6e31a14cbe655640c8fdeee5b2117c14aad095e0`.
 - New orchestration schema version: 2, while version-1 validation remains available.
-- CLI: `status`, `next-task`, `submit-result`, `show-summary`, `start-role`, `finish-role`, `init`, `enqueue`, `checkpoint`, `rehearse`, and `migrate-state`.
+- CLI: `status`, `next-task`, `submit-result`, `show-summary`, `start-role`, `finish-role`, `init`, `enqueue`, `prepare-workspace`, `checkpoint`, `integrate-fixture`, `rehearse`, and `migrate-state`.
 - Strict role tasks bind controller/repository/cycle/task identities, authorization, immutable plan and prior evidence, fixed model metadata, capability limits, and a canonical SHA-256 digest.
 - Strict role results exactly echo controller context. Accepted results receive durable receipts; exact replay is idempotent and conflicting replay fails closed.
 - Human handoffs are persisted and rendered but never launched automatically.
@@ -31,6 +31,21 @@ Architect plan
 → fixture-only integration
 → final summary
 ```
+
+## Phase 2 Revision 2
+
+Revision 1 checkpoint `c91e9ce37d52d676ead277dcb2492fd47aad4d77` received an independent Analyst `PASS`, followed by an Architect `REVISE`. The historical Analyst result remains part of the evidence chain; revision 2 does not replace it or claim Architect acceptance.
+
+Revision 2 addresses only the six Architect findings:
+
+1. Public `prepare-workspace` and fixture-only `integrate-fixture` commands complete the supported operator lifecycle without internal imports or manual state editing.
+2. Rendered role prompts contain the expected response payload, workspace/commit/scope details, validation requirements, and digest-bound actionable preceding evidence.
+3. Builder and Analyst results require an exact complete set of checkpoint-backed validation evidence; missing, duplicate, unknown, unresolvable, or context-mismatched evidence fails closed.
+4. Result submission independently enforces completed timing, the 15-minute role limit, the 90-minute active-cycle limit, and active holds while excluding human waiting.
+5. Every true terminal outcome atomically creates one deterministic final summary and simulated final outbox event; resumable reconciliation holds do not.
+6. Admission, persisted state validation, and fixture integration all require the exact `self-improvement` branch before Git mutation.
+
+The full public lifecycle is exercised by a subprocess-only CLI test. The complete revision-2 suite contains 90 offline tests and runs only through `scripts/test-offline.sh` under native inbound and outbound network denial. See [the revision-2 Builder handoff](docs/phase-2-revision-2-builder-handoff.md) for the exact evidence. GOV-002 Phase 2 remains pending independent Analyst and Architect review.
 
 Run it only under the network-denial boundary documented below:
 

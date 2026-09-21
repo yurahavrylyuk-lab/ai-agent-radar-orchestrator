@@ -1,7 +1,9 @@
 import { canonicalJson, sha256Canonical } from "./contracts.mjs";
-import { buildTask, findCycle, summaryDigest } from "./coordinator.mjs";
+import { buildTask, finalizeTerminalCycle, findCycle, summaryDigest } from "./coordinator.mjs";
 import { mutateStateV2 } from "./local-store.mjs";
+import { assertSubmissionTiming } from "./role-timing.mjs";
 import { validateRoleResultV2 } from "./validate.mjs";
+import { validateRequiredValidationEvidence } from "./validation-evidence.mjs";
 
 function same(left, right) { return canonicalJson(left) === canonicalJson(right); }
 function resultRecord(task, result, resultDigest, now) { return { taskId: task.taskId, taskDigest: task.taskDigest, cycleId: task.cycleId, role: task.role, purpose: task.purpose, resultDigest, result: structuredClone(result), acceptedAt: now }; }
@@ -34,9 +36,12 @@ export function submitRoleResult({ statePath, ownerId, ownerGeneration, result, 
     const task = state.tasks.find((item) => item.taskDigest === result.taskDigest); if (!task) throw new Error("UNKNOWN_TASK_DIGEST");
     if (state.pendingTaskId !== task.taskId) throw new Error("STALE_OR_NONPENDING_RESULT");
     validateRoleResultV2(result, task);
+    const disposition = result.outcome === "BLOCKED" || (task.purpose === "ARCHITECT_FINAL_DECISION" && result.outcome === "COMPLETED" && result.payload.decision !== "ACCEPT");
+    if (state.humanHold && !disposition) throw new Error("HUMAN_HOLD");
+    assertSubmissionTiming(state, task, { allowLimitExceeded: result.outcome === "BLOCKED" }); validateRequiredValidationEvidence(state, task, result);
     const cycle = findCycle(state, task.cycleId); const acceptedVersion = state.stateVersion + 1;
     const storedReceipt = receipt(task, resultDigest, acceptedVersion, now); state.results.push(resultRecord(task, result, resultDigest, now)); state.receipts.push(storedReceipt); state.pendingTaskId = null;
-    if (result.outcome === "BLOCKED") { cycle.status = "HALTED"; cycle.stage = "BLOCKED"; state.humanHold = true; state.activeCycleId = null; state.stateVersion = acceptedVersion; return { state, value: storedReceipt }; }
+    if (result.outcome === "BLOCKED") { finalizeTerminalCycle(state, cycle, { status: "HALTED", stage: "BLOCKED", terminalReason: `BLOCKED:${result.payload.code}`, now }); state.stateVersion = acceptedVersion; return { state, value: storedReceipt }; }
     switch (task.purpose) {
       case "ARCHITECT_PLAN":
       case "ARCHITECT_REVISION": { const content = approvedPlanPayload(result.payload, task); const plan = { cycleId: cycle.id, revision: task.planRevision, content: structuredClone(content), digest: sha256Canonical(content), architectResultDigest: resultDigest, createdAt: now }; state.plans.push(plan); cycle.planRevision = plan.revision;
@@ -45,18 +50,17 @@ export function submitRoleResult({ statePath, ownerId, ownerGeneration, result, 
       case "BUILDER_IMPLEMENTATION": { const checkpoint = state.checkpointReceipts.find((item) => item.taskId === task.taskId); if (!checkpoint) throw new Error("VERIFIED_CHECKPOINT_REQUIRED");
         if (checkpoint.candidateCommit !== result.payload.candidateCommit || checkpoint.parentCommit !== result.payload.parentCommit || checkpoint.treeId !== result.payload.treeId) throw new Error("BUILDER_RESULT_CHECKPOINT_MISMATCH");
         const expectedOperation = cycle.iteration === 1 ? "ADD" : "MODIFY"; if (result.payload.changedFiles.length !== 1 || result.payload.changedFiles[0].path !== "docs/learning/offline-fixture-reading.md" || result.payload.changedFiles[0].operation !== expectedOperation || result.payload.changedFiles[0].mode !== "100644") throw new Error("BUILDER_RESULT_SCOPE_MISMATCH");
-        for (const validation of result.payload.validation) if (validation.outcome !== "PASS" || validation.evidenceDigest !== sha256Canonical({ recipe: validation.recipeId, candidate: checkpoint.candidateCommit })) throw new Error("BUILDER_VALIDATION_EVIDENCE_UNRESOLVABLE");
         cycle.candidateCommit = checkpoint.candidateCommit; cycle.expectedTargetTip = cycle.baselineCommit;
         state.iterations.push({ id: `iteration:${cycle.id}:${cycle.iteration}`, cycleId: cycle.id, index: cycle.iteration, planRevision: cycle.planRevision, candidateCommit: checkpoint.candidateCommit, checkpointReceiptId: checkpoint.receiptId, reviewResultDigest: null });
         issue(state, cycle, "ANALYST_REVIEW", now, { candidateCommit: checkpoint.candidateCommit, reviewedCommit: checkpoint.candidateCommit, workspaceId: workspaceId(cycle, "analyst") }); break; }
-      case "ANALYST_REVIEW": { const currentIteration = state.iterations.find((item) => item.cycleId === cycle.id && item.index === cycle.iteration); if (!currentIteration || currentIteration.candidateCommit !== result.payload.reviewedCommit) throw new Error("ANALYST_ITERATION_MISMATCH"); for (const validation of result.payload.validation) if (validation.outcome !== "PASS" || validation.evidenceDigest !== sha256Canonical({ reviewed: result.payload.reviewedCommit })) throw new Error("ANALYST_VALIDATION_EVIDENCE_UNRESOLVABLE"); currentIteration.reviewResultDigest = resultDigest;
+      case "ANALYST_REVIEW": { const currentIteration = state.iterations.find((item) => item.cycleId === cycle.id && item.index === cycle.iteration); if (!currentIteration || currentIteration.candidateCommit !== result.payload.reviewedCommit) throw new Error("ANALYST_ITERATION_MISMATCH"); currentIteration.reviewResultDigest = resultDigest;
         addReviewBundle(state, cycle, task, result, resultDigest, now);
         if (result.payload.reviewState === "REVISE" && cycle.iteration < 3) { cycle.planRevision += 1; issue(state, cycle, "ARCHITECT_REVISION", now, { candidateCommit: cycle.candidateCommit, reviewedCommit: cycle.candidateCommit }); }
         else { if (["REJECT", "HUMAN_REVIEW_REQUIRED"].includes(result.payload.reviewState) || (result.payload.reviewState === "REVISE" && cycle.iteration === 3)) state.humanHold = true; issue(state, cycle, "ARCHITECT_FINAL_DECISION", now, { candidateCommit: cycle.candidateCommit, reviewedCommit: cycle.candidateCommit }); }
         break; }
-      case "ARCHITECT_FINAL_DECISION": { if (result.payload.analystResultDigest !== cycle.analystResultDigest) throw new Error("ARCHITECT_DECISION_REVIEW_MISMATCH"); const latestReview = state.reviews.findLast((item) => item.cycleId === cycle.id); if (result.payload.decision === "ACCEPT" && !["PASS", "PASS_WITH_RECOMMENDATIONS"].includes(latestReview?.reviewState)) throw new Error("ARCHITECT_ACCEPT_WITHOUT_ANALYST_PASS"); cycle.architectDecision = result.payload.decision; cycle.architectResultDigest = resultDigest;
+      case "ARCHITECT_FINAL_DECISION": { if (result.payload.analystResultDigest !== cycle.analystResultDigest) throw new Error("ARCHITECT_DECISION_REVIEW_MISMATCH"); const latestReview = state.reviews.findLast((item) => item.cycleId === cycle.id); if (result.payload.decision === "ACCEPT" && !["PASS", "PASS_WITH_RECOMMENDATIONS"].includes(latestReview?.reviewState)) throw new Error("ARCHITECT_ACCEPT_WITHOUT_ANALYST_PASS"); if (result.payload.decision === "ACCEPT") { const analystTask = state.tasks.find((item) => item.taskId === latestReview?.id.replace(/^review:/u, "")); const analystResult = state.results.find((item) => item.taskId === analystTask?.taskId); if (!analystTask || !analystResult) throw new Error("ARCHITECT_ACCEPT_WITHOUT_VALIDATED_ANALYST_EVIDENCE"); validateRequiredValidationEvidence(state, analystTask, analystResult.result); } cycle.architectDecision = result.payload.decision; cycle.architectResultDigest = resultDigest;
         if (result.payload.decision === "ACCEPT") { cycle.status = "REVIEW"; cycle.stage = "AWAITING_INTEGRATION"; }
-        else { cycle.status = result.payload.decision === "REJECT" ? "REJECTED" : "HALTED"; cycle.stage = "DISPOSITION"; state.humanHold = true; state.activeCycleId = null; }
+        else { const terminalStatus = result.payload.decision === "REJECT" ? "REJECTED" : result.payload.decision === "HUMAN_REVIEW" ? "ESCALATED" : "HALTED"; finalizeTerminalCycle(state, cycle, { status: terminalStatus, stage: "DISPOSITION", terminalReason: `ARCHITECT_${result.payload.decision}`, now }); }
         break; }
       default: throw new Error("UNSUPPORTED_TASK_PURPOSE");
     }
