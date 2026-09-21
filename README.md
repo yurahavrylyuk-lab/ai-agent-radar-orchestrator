@@ -47,6 +47,14 @@ Revision 2 addresses only the six Architect findings:
 
 The full public lifecycle is exercised by a subprocess-only CLI test. The complete revision-2 suite contains 90 offline tests and runs only through `scripts/test-offline.sh` under native inbound and outbound network denial. See [the revision-2 Builder handoff](docs/phase-2-revision-2-builder-handoff.md) for the exact evidence. GOV-002 Phase 2 remains pending independent Analyst and Architect review.
 
+## Phase 2 Revision 3
+
+Revision 2 checkpoint `02632a283f50847a81bce3c3466bf73c9f2ce4e2` received an independent Analyst `PASS`, followed by an Architect `REVISE`. The Architect confirmed the public CLI, prompt, timing, terminal-summary, and branch-safety findings closed, but identified one remaining blocker: checkpoint identity evidence incorrectly synthesized recipe `PASS` outcomes.
+
+Revision 3 separates controller-verified checkpoint identity from role-attested recipe outcomes. A checkpoint now establishes only candidate, tree, scope, workspace receipt, and repository/task binding. Each required recipe remains `AWAITING_ATTESTATION` until the role explicitly selects a digest-bound `PASS` or `FAIL` record. Positive Analyst review and Builder completion require every recipe to pass; a negative Analyst review can durably retain genuine failures and proceed through the REVISE loop. Integration independently revalidates the latest successful Analyst evidence before any write.
+
+The complete revision-3 suite contains 93 offline tests. Its public CLI lifecycle and deterministic rehearsal both demonstrate `FAIL → Analyst REVISE → iteration summary → Architect revision → corrected candidate → PASS → ACCEPT` using persisted evidence. See [the revision-3 Builder handoff](docs/phase-2-revision-3-builder-handoff.md). GOV-002 Phase 2 still awaits independent Analyst review and Architect disposition.
+
 Run it only under the network-denial boundary documented below:
 
 ```sh

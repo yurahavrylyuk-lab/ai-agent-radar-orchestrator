@@ -5,7 +5,7 @@ import { createInitialState } from "../../src/coordinator.mjs";
 import { sha256Canonical } from "../../src/contracts.mjs";
 import { createRoleTask, emptyEvidence } from "../../src/task-renderer.mjs";
 import { resultContextForTask } from "../../src/validate.mjs";
-import { expectedValidationEntries } from "../../src/validation-evidence.mjs";
+import { attestedValidationEntries } from "../../src/validation-evidence.mjs";
 
 export const OID_A = "a".repeat(40);
 export const OID_B = "b".repeat(40);
@@ -26,4 +26,4 @@ export function analystState(root, { iteration = 1, reviewCommit = OID_B, timing
   const task = createRoleTask({ controllerId: state.controllerId, repositoryId: state.repositoryId, evidenceMode: state.evidenceMode, cycleId: cycle.id, taskId: `analyst:${iteration}`, iteration, planRevision: iteration, role: "analyst", purpose: "ANALYST_REVIEW", binding: { ownerId: "owner", ownerGeneration: 1, issuedStateVersion: 0, baselineCommit: OID_A, iterationBaseCommit: cycle.iterationBaseCommit, expectedTargetBranch: "self-improvement", expectedTargetTip: OID_A, workspaceId: `analyst-${iteration}`, candidateCommit: reviewCommit, reviewedCommit: reviewCommit }, authorization: approval, plan, previousEvidence: emptyEvidence(), createdAt: cycle.createdAt });
   state.tasks.push(task); state.pendingTaskId = task.taskId; if (timing) state.timings.push({ taskId: task.taskId, status: "COMPLETED", waitingStartedAt: cycle.createdAt, startedAt: "2026-09-21T00:00:01.000Z", finishedAt: "2026-09-21T00:00:02.000Z", activeMs: 1000, waitingMs: 1000 }); return { state, task };
 }
-export function analystPayload(state, task, reviewState) { return { reviewedCommit: task.binding.reviewedCommit, reviewState, findings: reviewState === "PASS" ? [] : ["finding"], requiredChanges: reviewState === "REVISE" ? ["change"] : [], recommendations: reviewState === "PASS_WITH_RECOMMENDATIONS" ? ["recommendation"] : [], validation: expectedValidationEntries(state, task) }; }
+export function analystPayload(state, task, reviewState) { const validationOutcome = ["PASS", "PASS_WITH_RECOMMENDATIONS"].includes(reviewState) ? "PASS" : "FAIL"; return { reviewedCommit: task.binding.reviewedCommit, reviewState, findings: reviewState === "PASS" ? [] : ["finding"], requiredChanges: reviewState === "REVISE" ? ["change"] : [], recommendations: reviewState === "PASS_WITH_RECOMMENDATIONS" ? ["recommendation"] : [], validation: attestedValidationEntries(state, task, validationOutcome) }; }

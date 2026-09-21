@@ -24,7 +24,7 @@ export function createRoleTask(input) {
     authorization: structuredClone(input.authorization),
     plan: structuredClone(input.plan),
     previousEvidence: structuredClone(input.previousEvidence ?? emptyEvidence()),
-    responseSchema: { id: "gov-002-role-result", version: 2 },
+    responseSchema: { id: "gov-002-role-result", version: 3 },
     model: { name: ROLE_MODELS[input.role], reasoning: MODEL_REASONING[input.role] },
     limits: {
       maxIterations: PHASE2.maxIterations,
@@ -37,7 +37,7 @@ export function createRoleTask(input) {
       scheduling: false,
     },
     createdAt: input.createdAt,
-    templateVersion: "gov-002-phase2-r2",
+    templateVersion: "gov-002-phase2-r3",
   };
   task.taskDigest = sha256Canonical(task);
   validateRoleTask(task);
@@ -45,7 +45,7 @@ export function createRoleTask(input) {
 }
 
 function payloadTemplate(task, state) {
-  const validation = state ? expectedValidationEntries(state, task, { allowPending: true }) : task.authorization.validationRequirements.map((item) => ({ recipeId: item.id, outcome: null, evidenceDigest: null, skipReason: null }));
+  const validation = state ? expectedValidationEntries(state, task, { allowPending: true }) : task.authorization.validationRequirements.map((item) => ({ recipeId: item.id, outcome: null, evidence: null, evidenceDigest: null, skipReason: null }));
   if (["ARCHITECT_PLAN", "ARCHITECT_REVISION"].includes(task.purpose)) return {
     goal: task.plan.content?.goal ?? "<concise bounded goal>", scope: task.authorization.scope, allowedChanges: task.authorization.allowedChanges,
     forbiddenChanges: task.authorization.forbiddenChanges, acceptanceCriteria: task.authorization.acceptanceCriteria, validationRequirements: task.authorization.validationRequirements,
@@ -80,7 +80,7 @@ export function renderTaskPrompt(task, state = null) {
     operatorInstructions: {
       allowedOutcomes: ["COMPLETED", "BLOCKED"],
       blockedPayload: { code: "<stable code>", explanation: "<why the bounded task cannot proceed>", evidence: ["<local evidence>"] },
-      completion: validationEvidence.some((item) => item.status !== "READY") ? "Complete the required controller operation, then run next-task again to obtain resolved validation evidence before submitting." : "Fill the response envelope exactly; do not add fields or rewrite controller-provided identities and evidence digests.",
+      completion: validationEvidence.some((item) => item.status === "PENDING_CHECKPOINT") ? "Complete the required controller checkpoint operation, then run next-task again before performing validation." : "Perform every required validation recipe, select its matching PASS or FAIL attestation option, and place that complete entry in the response envelope. Do not infer PASS from checkpoint identity evidence.",
     },
     executionContext: { workspace: workspace ? { workspaceId: workspace.workspaceId, role: workspace.role, root: workspace.root, expectedCommit: workspace.expectedCommit } : null, candidateCommit: task.binding.candidateCommit, reviewedCommit: task.binding.reviewedCommit, scope: task.authorization.scope, validationRequirements: task.authorization.validationRequirements, requiredValidationEvidence: validationEvidence, actionablePrecedingEvidence: task.previousEvidence.records },
     task,

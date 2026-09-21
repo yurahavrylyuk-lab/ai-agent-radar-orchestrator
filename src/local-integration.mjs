@@ -4,11 +4,15 @@ import { PHASE2, sha256Canonical } from "./contracts.mjs";
 import { finalizeTerminalCycle, isRealTarget } from "./coordinator.mjs";
 import { changedFiles, commitMetadata, currentBranch, git, resolveCommit, statusPorcelain, verifyPilotCandidate } from "./git-evidence.mjs";
 import { acquireLock, mutateStateV2, readState } from "./local-store.mjs";
+import { validateRequiredValidationEvidence } from "./validation-evidence.mjs";
 import { resolveRegisteredWorkspace } from "./workspaces.mjs";
 
 function requireApproved(state, cycle) {
   if (cycle.architectDecision !== "ACCEPT" || !cycle.architectResultDigest) throw new Error("ARCHITECT_ACCEPT_REQUIRED");
   const review = state.reviews.findLast((item) => item.cycleId === cycle.id); if (!review || !["PASS", "PASS_WITH_RECOMMENDATIONS"].includes(review.reviewState) || review.resultDigest !== cycle.analystResultDigest || review.reviewedCommit !== cycle.candidateCommit) throw new Error("INDEPENDENT_ANALYST_PASS_REQUIRED");
+  const analystTask = state.tasks.find((item) => item.taskId === review.id.replace(/^review:/u, "")); const analystResult = state.results.find((item) => item.taskId === analystTask?.taskId);
+  if (!analystTask || !analystResult) throw new Error("ANALYST_VALIDATION_EVIDENCE_REQUIRED");
+  validateRequiredValidationEvidence(state, analystTask, analystResult.result);
   return review;
 }
 
