@@ -3,7 +3,7 @@
   "$id": "machine-state.schema.json",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schemaVersion", "controllerId", "stateVersion", "owner", "activeCycleId", "humanHold", "queue"],
+  "required": ["schemaVersion", "controllerId", "stateVersion", "owner", "activeCycleId", "humanHold", "queue", "cycles"],
   "properties": {
     "schemaVersion": { "type": "integer", "minimum": 1 },
     "controllerId": { "type": "string", "minLength": 1 },
@@ -11,6 +11,7 @@
     "owner": { "type": "object", "additionalProperties": false, "required": ["id", "generation"], "properties": { "id": { "type": "string", "minLength": 1 }, "generation": { "type": "integer", "minimum": 1 } } },
     "activeCycleId": { "type": ["string", "null"] },
     "humanHold": { "type": "boolean" },
-    "queue": { "type": "array", "items": { "$ref": "request.schema.json" } }
+    "queue": { "type": "array", "items": { "$ref": "request.schema.json" } },
+    "cycles": { "type": "array", "items": { "$ref": "cycle.schema.json" } }
   }
 }

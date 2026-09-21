@@ -1,4 +1,5 @@
 import { immutable } from "./contracts.mjs";
+import { validateCycle } from "./validate.mjs";
 
 const allowed = Object.freeze({
   QUEUED: ["ACTIVE", "HALTED"],
@@ -9,11 +10,13 @@ const allowed = Object.freeze({
 });
 
 export function transitionCycle(cycle, next) {
+  validateCycle(cycle);
   if (!allowed[cycle.status]?.includes(next)) throw new Error(`Illegal transition ${cycle.status} -> ${next}`);
   return immutable({ ...cycle, status: next });
 }
 
 export function nextReviewIteration(cycle, reviewState) {
+  validateCycle(cycle);
   if (cycle.iterationIds.length >= 3 && !["PASS", "PASS_WITH_RECOMMENDATIONS"].includes(reviewState)) return immutable({ ...cycle, status: "ESCALATED" });
   return immutable(cycle);
 }

@@ -10,5 +10,6 @@ test("14 stale generation, wrong owner, and wrong state version fail closed", ()
   assert.throws(() => assertOwnership(state, { ownerId: "owner", generation: 2, stateVersion: 3 }), /WRONG_STATE/);
 });
 test("15 human hold durably prevents new admissions", () => {
-  assert.equal(dequeue([{ id: "r" }], { humanHold: true }).request, null);
+  const request = { id: "r", source: "HUMAN", createdAt: "2026-09-21T00:00:00Z", priority: 0, payload: {} };
+  assert.equal(dequeue([request], { humanHold: true }).request, null);
 });
