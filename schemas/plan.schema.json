@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "plan.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["revision", "digest", "content"],
+  "properties": {
+    "revision": { "type": "integer", "minimum": 1 },
+    "digest": { "type": ["string", "null"], "pattern": "^[0-9a-f]{64}$" },
+    "content": {
+      "anyOf": [
+        { "type": "null" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["goal", "scope", "allowedChanges", "forbiddenChanges", "acceptanceCriteria", "validationRequirements", "risks", "rationale", "resolvesFindingIds"],
+          "properties": {
+            "goal": { "type": "string", "minLength": 1 },
+            "scope": { "type": "string", "minLength": 1 },
+            "allowedChanges": { "type": "array", "items": { "type": "object", "additionalProperties": false, "required": ["path", "operation"], "properties": { "path": { "type": "string", "minLength": 1 }, "operation": { "enum": ["ADD", "MODIFY"] } } } },
+            "forbiddenChanges": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+            "acceptanceCriteria": { "type": "array", "items": { "$ref": "#/$defs/rule" } },
+            "validationRequirements": { "type": "array", "items": { "$ref": "#/$defs/rule" } },
+            "risks": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+            "rationale": { "type": "string", "minLength": 1 },
+            "resolvesFindingIds": { "type": "array", "items": { "type": "string", "minLength": 1 } }
+          }
+        }
+      ]
+    }
+  },
+  "$defs": {
+    "rule": { "type": "object", "additionalProperties": false, "required": ["id", "description"], "properties": { "id": { "type": "string", "minLength": 1 }, "description": { "type": "string", "minLength": 1 } } }
+  }
+}

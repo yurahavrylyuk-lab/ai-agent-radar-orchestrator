@@ -1,5 +1,37 @@
 {
-  "$schema": "https://json-schema.org/draft/2020-12/schema", "$id": "role-result.schema.json", "type": "object", "additionalProperties": false,
-  "required": ["role", "status", "model", "startedAt", "finishedAt", "activeMs", "simulated"],
-  "properties": { "role": { "enum": ["architect", "builder", "analyst"] }, "status": { "type": "string", "minLength": 1 }, "model": { "enum": ["Astra High", "Sol Medium", "Terra High"] }, "startedAt": { "type": "string", "minLength": 1 }, "finishedAt": { "type": ["string", "null"] }, "activeMs": { "type": "integer", "minimum": 0, "maximum": 900000 }, "simulated": { "const": true } }
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "role-result.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "role": {}, "status": {}, "model": {}, "startedAt": {}, "finishedAt": {}, "activeMs": {}, "simulated": {},
+    "schemaVersion": {}, "taskDigest": {}, "context": {}, "outcome": {}, "payload": {}
+  },
+  "oneOf": [{ "$ref": "#/$defs/v1" }, { "$ref": "#/$defs/v2" }],
+  "$defs": {
+    "v1": {
+      "type": "object", "additionalProperties": false,
+      "required": ["role", "status", "model", "startedAt", "finishedAt", "activeMs", "simulated"],
+      "properties": { "role": { "enum": ["architect", "builder", "analyst"] }, "status": { "type": "string", "minLength": 1 }, "model": { "enum": ["Astra High", "Sol Medium", "Terra High"] }, "startedAt": { "type": "string", "minLength": 1 }, "finishedAt": { "type": ["string", "null"] }, "activeMs": { "type": "integer", "minimum": 0, "maximum": 900000 }, "simulated": { "const": true } }
+    },
+    "v2": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schemaVersion", "taskDigest", "context", "outcome", "payload"],
+      "properties": { "schemaVersion": { "const": 2 }, "taskDigest": { "$ref": "#/$defs/digest" }, "context": { "$ref": "#/$defs/context" }, "outcome": { "enum": ["COMPLETED", "BLOCKED"] }, "payload": { "oneOf": [{ "$ref": "#/$defs/blocked" }, { "$ref": "#/$defs/architectPlan" }, { "$ref": "#/$defs/builder" }, { "$ref": "#/$defs/analyst" }, { "$ref": "#/$defs/finalDecision" }] } }
+    },
+    "context": {
+      "type": "object", "additionalProperties": false,
+      "required": ["controllerId", "repositoryId", "evidenceMode", "cycleId", "taskId", "iteration", "planRevision", "role", "purpose", "binding", "authorization", "planDigest", "precedingEvidenceDigest", "responseSchema"],
+      "properties": { "controllerId": { "type": "string", "minLength": 1 }, "repositoryId": { "type": "string", "minLength": 1 }, "evidenceMode": { "enum": ["SIMULATED", "HUMAN_ASSISTED"] }, "cycleId": { "type": "string", "minLength": 1 }, "taskId": { "type": "string", "minLength": 1 }, "iteration": { "type": "integer", "minimum": 1, "maximum": 3 }, "planRevision": { "type": "integer", "minimum": 1 }, "role": { "enum": ["architect", "builder", "analyst"] }, "purpose": { "enum": ["ARCHITECT_PLAN", "ARCHITECT_REVISION", "BUILDER_IMPLEMENTATION", "ANALYST_REVIEW", "ARCHITECT_FINAL_DECISION"] }, "binding": { "$ref": "role-task.schema.json#/$defs/binding" }, "authorization": { "$ref": "role-task.schema.json#/$defs/authorization" }, "planDigest": { "type": ["string", "null"], "pattern": "^[0-9a-f]{64}$" }, "precedingEvidenceDigest": { "$ref": "#/$defs/digest" }, "responseSchema": { "$ref": "role-task.schema.json#/$defs/responseSchema" } }
+    },
+    "blocked": { "type": "object", "additionalProperties": false, "required": ["code", "explanation", "evidence"], "properties": { "code": { "type": "string", "minLength": 1 }, "explanation": { "type": "string", "minLength": 1 }, "evidence": { "type": "array", "items": { "type": "string", "minLength": 1 } } } },
+    "architectPlan": { "type": "object", "additionalProperties": false, "required": ["goal", "scope", "allowedChanges", "forbiddenChanges", "acceptanceCriteria", "validationRequirements", "risks", "rationale", "resolvesFindingIds"], "properties": { "goal": { "type": "string", "minLength": 1 }, "scope": { "type": "string", "minLength": 1 }, "allowedChanges": { "type": "array", "items": { "$ref": "role-task.schema.json#/$defs/change" } }, "forbiddenChanges": { "$ref": "#/$defs/stringArray" }, "acceptanceCriteria": { "type": "array", "items": { "$ref": "role-task.schema.json#/$defs/rule" } }, "validationRequirements": { "type": "array", "items": { "$ref": "role-task.schema.json#/$defs/rule" } }, "risks": { "$ref": "#/$defs/stringArray" }, "rationale": { "type": "string", "minLength": 1 }, "resolvesFindingIds": { "$ref": "#/$defs/stringArray" } } },
+    "builder": { "type": "object", "additionalProperties": false, "required": ["candidateCommit", "parentCommit", "treeId", "changedFiles", "validation", "deviations", "blockers"], "properties": { "candidateCommit": { "$ref": "#/$defs/oid" }, "parentCommit": { "$ref": "#/$defs/oid" }, "treeId": { "$ref": "#/$defs/oid" }, "changedFiles": { "type": "array", "items": { "type": "object", "additionalProperties": false, "required": ["path", "operation", "mode"], "properties": { "path": { "type": "string", "minLength": 1 }, "operation": { "enum": ["ADD", "MODIFY"] }, "mode": { "const": "100644" } } } }, "validation": { "type": "array", "items": { "$ref": "#/$defs/validation" } }, "deviations": { "$ref": "#/$defs/stringArray" }, "blockers": { "$ref": "#/$defs/stringArray" } } },
+    "analyst": { "type": "object", "additionalProperties": false, "required": ["reviewedCommit", "reviewState", "findings", "requiredChanges", "recommendations", "validation"], "properties": { "reviewedCommit": { "$ref": "#/$defs/oid" }, "reviewState": { "enum": ["PASS", "PASS_WITH_RECOMMENDATIONS", "REVISE", "REJECT", "HUMAN_REVIEW_REQUIRED"] }, "findings": { "$ref": "#/$defs/stringArray" }, "requiredChanges": { "$ref": "#/$defs/stringArray" }, "recommendations": { "$ref": "#/$defs/stringArray" }, "validation": { "type": "array", "items": { "$ref": "#/$defs/validation" } } } },
+    "finalDecision": { "type": "object", "additionalProperties": false, "required": ["reviewedCommit", "analystResultDigest", "decision", "rationale", "recommendationDispositions"], "properties": { "reviewedCommit": { "$ref": "#/$defs/oid" }, "analystResultDigest": { "$ref": "#/$defs/digest" }, "decision": { "enum": ["ACCEPT", "REVISE", "REJECT", "HUMAN_REVIEW"] }, "rationale": { "type": "string", "minLength": 1 }, "recommendationDispositions": { "type": "array", "items": { "type": "object", "additionalProperties": false, "required": ["recommendation", "disposition"], "properties": { "recommendation": { "type": "string", "minLength": 1 }, "disposition": { "type": "string", "minLength": 1 } } } } } },
+    "validation": { "type": "object", "additionalProperties": false, "required": ["recipeId", "outcome", "evidenceDigest", "skipReason"], "properties": { "recipeId": { "type": "string", "minLength": 1 }, "outcome": { "enum": ["PASS", "FAIL", "SKIPPED"] }, "evidenceDigest": { "type": ["string", "null"], "pattern": "^[0-9a-f]{64}$" }, "skipReason": { "type": ["string", "null"] } } },
+    "stringArray": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+    "oid": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+    "digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+  }
 }

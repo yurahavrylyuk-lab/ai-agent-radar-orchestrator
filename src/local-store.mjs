@@ -1,10 +1,11 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { parseJsonStrict } from "./contracts.mjs";
 import { appendEvent, canonicalEqual, validateEvent } from "./outbox.mjs";
 import { assertOwnership } from "./ownership.mjs";
 import { dequeue } from "./queue.mjs";
-import { validateCycle, validateIteration, validateMachineState, validateSummary } from "./validate.mjs";
+import { validateCycle, validateIteration, validateMachineState, validateMachineStateV2, validateSummary } from "./validate.mjs";
 
 export class PersistenceDurabilityUncertainError extends Error {
   constructor(cause) {
@@ -62,7 +63,7 @@ export function acquireLock(lockPath, owner) {
 }
 
 export function readState(filePath) {
-  return JSON.parse(fs.readFileSync(filePath, "utf8"));
+  return parseJsonStrict(fs.readFileSync(filePath, "utf8"));
 }
 
 export function replaceStateAtomic(filePath, value, { failBeforeRename = false, failAfterRename = false, onOperation = () => {} } = {}) {
@@ -227,4 +228,33 @@ export function admitNextCycle({ statePath, lockPath, claim, cycle, now, persist
   } finally {
     lock.release();
   }
+}
+
+export function initializeStateV2(filePath, state) {
+  validateMachineStateV2(state);
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  const serialized = `${JSON.stringify(state, null, 2)}\n`; let fd = null;
+  try {
+    fd = fs.openSync(filePath, "wx", 0o600); fs.writeFileSync(fd, serialized, "utf8"); fs.fsyncSync(fd);
+  } finally { if (fd !== null) fs.closeSync(fd); }
+  const directoryFd = fs.openSync(path.dirname(filePath), "r"); try { fs.fsyncSync(directoryFd); } finally { fs.closeSync(directoryFd); }
+  return structuredClone(state);
+}
+
+export function mutateStateV2({ statePath, ownerId, ownerGeneration, mutator, persistenceOptions = {} }) {
+  const lockPath = `${statePath}.lock`;
+  const lock = acquireLock(lockPath, { controllerId: ownerId, generation: ownerGeneration, pid: process.pid });
+  if (!lock.acquired) { const error = new Error(lock.reason); error.code = "STATE_LOCKED"; throw error; }
+  try {
+    const state = readState(statePath); validateMachineStateV2(state);
+    if (state.owner.id !== ownerId) throw new Error("WRONG_OWNER");
+    if (state.owner.generation !== ownerGeneration) throw new Error("STALE_GENERATION");
+    const originalVersion = state.stateVersion;
+    const operation = mutator(structuredClone(state));
+    if (operation?.unchanged === true) return { state: structuredClone(state), value: operation.value, changed: false };
+    const candidate = operation?.state ?? operation;
+    if (!candidate || candidate.stateVersion !== originalVersion + 1) throw new Error("STATE_VERSION_MUST_ADVANCE_EXACTLY_ONCE");
+    validateMachineStateV2(candidate); replaceStateAtomic(statePath, candidate, persistenceOptions);
+    return { state: structuredClone(candidate), value: operation?.value, changed: true };
+  } finally { lock.release(); }
 }

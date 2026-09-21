@@ -4,6 +4,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "./scripts/test-offline.sh"
+    "test": "./scripts/test-offline.sh",
+    "controller": "/usr/local/bin/node src/cli.mjs",
+    "rehearse": "/usr/local/bin/node src/cli.mjs rehearse"
   }
 }

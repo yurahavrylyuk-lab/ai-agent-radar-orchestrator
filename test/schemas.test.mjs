@@ -9,8 +9,19 @@ const iteration = (overrides = {}) => ({ id: "i1", cycleId: "c1", index: 1, plan
 
 test("1 schema files are strict and complete", () => {
   const files = fs.readdirSync(new URL("../schemas", import.meta.url)).filter((name) => name.endsWith(".json"));
-  assert.equal(files.length, 8);
-  for (const file of files.filter((name) => name !== "definitions.schema.json")) assert.equal(JSON.parse(fs.readFileSync(new URL(`../schemas/${file}`, import.meta.url))).additionalProperties, false);
+  const expected = ["cycle.schema.json", "definitions.schema.json", "integration-intent.schema.json", "iteration.schema.json", "machine-state.schema.json", "notification.schema.json", "plan.schema.json", "receipt.schema.json", "request.schema.json", "role-result.schema.json", "role-task.schema.json", "summary.schema.json"];
+  assert.deepEqual(files.sort(), expected);
+  for (const file of files) {
+    const schema = JSON.parse(fs.readFileSync(new URL(`../schemas/${file}`, import.meta.url)));
+    assert.equal(schema.$schema, "https://json-schema.org/draft/2020-12/schema", file);
+    assert.equal(schema.$id, file, file);
+    if (file === "definitions.schema.json") { assert.equal(typeof schema.$defs, "object"); continue; }
+    assert.equal(schema.type, "object", file);
+    assert.equal(schema.additionalProperties, false, file);
+    assert.ok(Array.isArray(schema.required) || Array.isArray(schema.oneOf), file);
+    assert.equal(typeof schema.properties, "object", file);
+    for (const field of schema.required ?? []) assert.ok(field in schema.properties, `${file}: missing property definition for ${field}`);
+  }
 });
 test("2 runtime validators reject missing, mistyped, and unknown fields", () => {
   assert.equal(validateRequest(request), true);

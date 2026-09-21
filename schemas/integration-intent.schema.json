@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "integration-intent.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "intentId", "repositoryId", "cycleId", "targetRoot", "targetBranch", "oldTip", "newTip", "candidateTree", "scopeDigest", "approvalId", "reviewResultDigest", "architectResultDigest", "status", "createdAt"],
+  "properties": {
+    "schemaVersion": { "const": 2 }, "intentId": { "type": "string", "minLength": 1 }, "repositoryId": { "type": "string", "minLength": 1 }, "cycleId": { "type": "string", "minLength": 1 },
+    "targetRoot": { "type": "string", "minLength": 1 }, "targetBranch": { "type": "string", "minLength": 1 },
+    "oldTip": { "type": "string", "pattern": "^[0-9a-f]{40}$" }, "newTip": { "type": "string", "pattern": "^[0-9a-f]{40}$" }, "candidateTree": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+    "scopeDigest": { "type": "string", "pattern": "^[0-9a-f]{64}$" }, "approvalId": { "type": "string", "minLength": 1 }, "reviewResultDigest": { "type": "string", "pattern": "^[0-9a-f]{64}$" }, "architectResultDigest": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "status": { "enum": ["PREPARED", "APPLIED", "RECONCILIATION_REQUIRED"] }, "createdAt": { "type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{1,9})?Z$" }
+  }
+}

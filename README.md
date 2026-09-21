@@ -1,6 +1,45 @@
 # AI Agent Radar Offline Self-Improvement Controller
 
-This repository is a dependency-free, local-only Phase 1 prototype. It simulates governance orchestration without launching Codex, contacting providers, publishing Git changes, sending notifications, or scheduling work.
+This repository is a dependency-free, local-only governance controller. Phase 1 established the fail-closed offline prototype; GOV-002 Phase 2 revision 1 adds human-assisted, data-only role handoffs and trusted Git operations that are enabled only for disposable fixture repositories. It does not launch Codex, contact providers, publish Git changes, send notifications, schedule work, or activate the real pilot.
+
+## Phase 2 Revision 1
+
+- Accepted parent checkpoint: `6e31a14cbe655640c8fdeee5b2117c14aad095e0`.
+- New orchestration schema version: 2, while version-1 validation remains available.
+- CLI: `status`, `next-task`, `submit-result`, `show-summary`, `start-role`, `finish-role`, `init`, `enqueue`, `checkpoint`, `rehearse`, and `migrate-state`.
+- Strict role tasks bind controller/repository/cycle/task identities, authorization, immutable plan and prior evidence, fixed model metadata, capability limits, and a canonical SHA-256 digest.
+- Strict role results exactly echo controller context. Accepted results receive durable receipts; exact replay is idempotent and conflicting replay fails closed.
+- Human handoffs are persisted and rendered but never launched automatically.
+- Builder and Analyst workspaces are independent local Git copies with no remotes, alternates, credentials, inherited hooks, shared metadata, or network capability.
+- Trusted checkpointing verifies a single-parent linear history, exact per-iteration and cumulative pilot scope, regular non-executable mode, and clean workspace state.
+- Trusted integration is implemented and tested only for disposable fixtures. It writes an intent before an expected-old ref update and preserves the reviewed commit ID. Uncertainty requires reconciliation and prohibits retry.
+- Explicit v1-to-v2 migration preserves the exact legacy bytes and SHA-256 digest; reads never migrate implicitly.
+- The real target gate is fixed false and returns `REAL_PILOT_NOT_AUTHORIZED`.
+
+The approved simulated rehearsal is:
+
+```text
+Architect plan
+→ Builder candidate 1
+→ Analyst REVISE
+→ iteration summary 1
+→ Architect revision
+→ Builder candidate 2
+→ Analyst PASS
+→ iteration summary 2
+→ Architect ACCEPT
+→ fixture-only integration
+→ final summary
+```
+
+Run it only under the network-denial boundary documented below:
+
+```sh
+/usr/bin/sandbox-exec \
+  -p '(version 1) (allow default) (deny network*)' \
+  /usr/local/bin/node src/cli.mjs rehearse \
+  --runtime .runtime/manual-rehearsal
+```
 
 ## Approved Plan
 
@@ -60,7 +99,7 @@ cd '/Users/yuriy/Documents/IT Study/General/General/AI Agents/ai-agent-radar-orc
   test/*.test.mjs
 ```
 
-Result: 46 tests, 46 passed, 0 failed. The suite preserves all original 32 behavioral cases and adds 14 direct regressions for runtime iteration bounds, source-authoritative queue ordering, canonical review/outbox transactions, descriptor and directory-sync durability, and real cross-process cycle admission. It includes an independent `sandbox_check` assertion for denied `network-outbound` and `network-inbound`. `scripts/test-offline.sh` performs the same denial check and never falls back to an unsandboxed command; `npm test` delegates to that wrapper.
+Phase 1 result: 46 tests, 46 passed, 0 failed. Phase 2 preserves all 46 assertions and expands the same network-denied suite with contract, lifecycle, replay, concurrency, migration, real local Git, uncertainty, CLI, snapshot, and rehearsal coverage. The final Builder handoff records the current total. The suite includes an independent `sandbox_check` assertion for denied `network-outbound` and `network-inbound`. `scripts/test-offline.sh` performs the same denial check and never falls back to an unsandboxed command; `npm test` delegates to that wrapper.
 
 Revision 4 target preservation uses a new Node-only SHA-256 manifest stored in a Builder-owned `/private/tmp/gov002-r4-builder.*` directory. The script obtains non-ignored paths from `git -c core.optionalLocks=false ls-files -co --exclude-standard -z`, sorts paths lexically, requires each entry to be a regular file, and records `{ path, sha256 }` objects. Exact serialization is `JSON.stringify(records, null, 2) + "\\n"`, written with mode `0600`. The post-build file must compare byte-for-byte with the pre-build file, alongside unchanged Git refs and status.
 
@@ -86,3 +125,9 @@ The earlier manifest serialization was not reconstructed or corrected during rev
 - Local checkpoint: created only after all final checks; the exact commit SHA is returned to the Analyst after creation.
 
 Stop condition: independent Analyst review of the exact local commit. GOV-002 is not COMPLETE, and no automation is active.
+
+## Phase 2 Builder Evidence
+
+The Phase 2 target baseline uses the same Node-only hashing method: paths come from `git ls-files -co --exclude-standard -z`, are deduplicated and lexically sorted, each supported regular file is hashed with built-in `node:crypto` SHA-256, and the exact manifest bytes are `JSON.stringify(records, null, 2) + "\n"`. The ignored Builder evidence directory is `.runtime/phase2-r1-builder-evidence`; modes, symbolic HEAD, refs, status, Git config, and index are compared separately.
+
+The Phase 1 Analyst `PASS` and Architect `ACCEPT` are recorded only as provenance supplied by the human-authored Phase 2 instruction. This Builder does not claim an independent Phase 2 review. See [Phase 1 acceptance](docs/phase-1-acceptance.md), [Phase 2 plan](docs/phase-2-plan.md), [operator guide](docs/operator-guide.md), and [Builder handoff](docs/phase-2-builder-handoff.md).
