@@ -43,3 +43,23 @@ The rehearsal is fixture-only:
 Never point initialization or integration at the real target during Phase 2. `REAL_PILOT_NOT_AUTHORIZED` is intentional. Real human-operated role sessions additionally require independently verified host filesystem and network permissions before any later pilot activation; this checkpoint does not establish those permissions.
 
 If checkpoint or integration status is uncertain, preserve the intent and observed state. Do not retry automatically. Exit code 2 denotes validation/policy refusal, 3 denotes hold/uncertainty, and 1 denotes an unexpected internal failure.
+
+## Future activation-gate operation
+
+The real-pilot commands are present for independent review but are not authorization to run a pilot:
+
+```sh
+/usr/local/bin/node src/cli.mjs authorize-pilot --state /absolute/protected/authority-state.json --file /absolute/request.json --approval-file /absolute/human-approval.json
+/usr/local/bin/node src/cli.mjs show-authorization --state /absolute/protected/authority-state.json --authorization AUTHORIZATION_ID
+/usr/local/bin/node src/cli.mjs integrate-local --state /absolute/protected/authority-state.json --cycle CYCLE_ID
+```
+
+Do not run these against the protected AI Agent Radar target until the activation-capable commit has passed independent Analyst review, received Architect `ACCEPT`, and been published normally to the exact approved `origin/main`. The eventual human operator must create the authority directory at `/Users/yuriy/Library/Application Support/AI Agent Radar Orchestrator/authority/` with mode `0700`; the controller intentionally does not provision it or change host permissions. The state file is created with mode `0600` by the trusted operator command. Never copy a grant or state file to another path: authority is bound to the canonical state path and its parent filesystem identity.
+
+The operator must run `authorize-pilot` from the reviewed controller `main` checkout in an interactive terminal. It validates the complete request, target snapshots, Git-directory identity, exact sole controller remote and upstream, and local OS boundary proof; displays the complete proposed grant and digest; and accepts only the exact `CONFIRM <authorizationDigest>` response. There is no `--yes`, `--now`, environment approval, or role-issued grant path. The exact human statement is request-specific and is displayed as part of the proposal.
+
+Every Architect, Builder, and Analyst process and descendant must be launched by the human under the reviewed `sandbox-exec` role profile. That profile denies all network access, denies authority-store reads and writes, denies controller and authoritative-target writes, and allows only the designated role-output/workspace path. File mode `0700` alone is not an adequate boundary for same-user processes. The controller renders the required boundary mechanism and policy digest in each activation task but never launches a role automatically.
+
+`integrate-local` accepts only `--state` and `--cycle`; target, branch, candidate, and commit overrides are forbidden. It requires a claimed grant, complete successful validation attestations, an eligible independent Analyst result, and a matching Architect `ACCEPT`. It imports only the reviewed local candidate objects, updates only `refs/heads/self-improvement` with expected-old protection, preserves the commit ID, and performs no remote push. Once durable intent exists, any uncertainty enters reconciliation and must not be retried automatically.
+
+The authority ledger retains issued, closed, reconciliation, and consumed history. Confirmed replay returns stored evidence without a second mutation. Notification delivery is still simulated, and the runtime has no provider, publication, scheduling, paid-execution, or GitHub-credential capability.

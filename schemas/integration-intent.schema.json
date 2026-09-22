@@ -3,9 +3,12 @@
   "$id": "integration-intent.schema.json",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schemaVersion", "intentId", "repositoryId", "cycleId", "targetRoot", "targetBranch", "oldTip", "newTip", "candidateTree", "scopeDigest", "approvalId", "reviewResultDigest", "architectResultDigest", "status", "createdAt"],
+  "oneOf": [
+    { "required": ["schemaVersion", "intentId", "repositoryId", "cycleId", "targetRoot", "targetBranch", "oldTip", "newTip", "candidateTree", "scopeDigest", "approvalId", "reviewResultDigest", "architectResultDigest", "status", "createdAt"], "properties": { "schemaVersion": { "const": 2 } } },
+    { "required": ["schemaVersion", "intentId", "authorizationId", "authorizationDigest", "repositoryId", "cycleId", "targetRoot", "targetBranch", "oldTip", "newTip", "candidateTree", "scopeDigest", "reviewResultDigest", "architectResultDigest", "status", "createdAt"], "properties": { "schemaVersion": { "const": 3 } } }
+  ],
   "properties": {
-    "schemaVersion": { "const": 2 }, "intentId": { "type": "string", "minLength": 1 }, "repositoryId": { "type": "string", "minLength": 1 }, "cycleId": { "type": "string", "minLength": 1 },
+    "schemaVersion": { "enum": [2, 3] }, "intentId": { "type": "string", "minLength": 1 }, "authorizationId": { "type": "string", "minLength": 1 }, "authorizationDigest": { "type": "string", "pattern": "^[0-9a-f]{64}$" }, "repositoryId": { "type": "string", "minLength": 1 }, "cycleId": { "type": "string", "minLength": 1 },
     "targetRoot": { "type": "string", "minLength": 1 }, "targetBranch": { "const": "self-improvement" },
     "oldTip": { "type": "string", "pattern": "^[0-9a-f]{40}$" }, "newTip": { "type": "string", "pattern": "^[0-9a-f]{40}$" }, "candidateTree": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
     "scopeDigest": { "type": "string", "pattern": "^[0-9a-f]{64}$" }, "approvalId": { "type": "string", "minLength": 1 }, "reviewResultDigest": { "type": "string", "pattern": "^[0-9a-f]{64}$" }, "architectResultDigest": { "type": "string", "pattern": "^[0-9a-f]{64}$" },

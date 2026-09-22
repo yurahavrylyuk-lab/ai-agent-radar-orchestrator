@@ -19,6 +19,7 @@ function requireApproved(state, cycle) {
 export function integrateFixtureCandidate({ statePath, ownerId, ownerGeneration, cycleId, targetRoot, now, fixture = false, inject = null }) {
   if (!fixture || isRealTarget(targetRoot) || PHASE2.realPilotActivation) throw Object.assign(new Error("REAL_PILOT_NOT_AUTHORIZED"), { code: "REAL_PILOT_NOT_AUTHORIZED" });
   const canonicalTarget = fs.realpathSync(targetRoot); const initial = readState(statePath); const cycle = initial.cycles.find((item) => item.id === cycleId); if (!cycle) throw new Error("CYCLE_NOT_FOUND");
+  if (initial.schemaVersion !== 2 || initial.evidenceMode !== "SIMULATED" || initial.capabilities.realPilotActivation !== false) throw Object.assign(new Error("REAL_PILOT_NOT_AUTHORIZED"), { code: "REAL_PILOT_NOT_AUTHORIZED" });
   if (cycle.targetBranch !== PHASE2.pilotBranch) throw new Error("TARGET_BRANCH_NOT_AUTHORIZED");
   if (initial.integrationIntents.some((item) => item.cycleId === cycleId)) throw Object.assign(new Error("INTEGRATION_RECONCILIATION_REQUIRED"), { code: "INTEGRATION_RECONCILIATION_REQUIRED" });
   if (initial.humanHold) throw new Error("HUMAN_HOLD");

@@ -55,6 +55,16 @@ Revision 3 separates controller-verified checkpoint identity from role-attested 
 
 The complete revision-3 suite contains 93 offline tests. Its public CLI lifecycle and deterministic rehearsal both demonstrate `FAIL → Analyst REVISE → iteration summary → Architect revision → corrected candidate → PASS → ACCEPT` using persisted evidence. See [the revision-3 Builder handoff](docs/phase-2-revision-3-builder-handoff.md). GOV-002 Phase 2 still awaits independent Analyst review and Architect disposition.
 
+## Real-pilot activation gate revision 1
+
+The activation gate adds a separate authority-state version for a future, single bounded `HUMAN_ASSISTED` pilot. It does not activate that pilot. An immutable grant binds the reviewed and published controller release, exact controller remote policy, protected authority-store identity, request digest, target root/Git directory/branch/baseline/snapshots, fixed one-file scope, validation policy, and a single integration permission. Mutable claim and integration lifecycle data is retained separately in one ledger.
+
+The trusted public commands are `authorize-pilot`, `show-authorization`, and `integrate-local`. Authorization has no `--yes`, environment-variable, fixture, or role-result shortcut; it requires the exact human statement and digest-specific interactive confirmation. Real admission atomically claims the grant with one cycle and task. Trusted integration derives its target, branch, candidate, and grant from protected state, writes durable intent before Git mutation, preserves the independently reviewed candidate commit, and never pushes.
+
+Roles remain data-only human handoffs. The mandatory wrapper proves native macOS filesystem denial for authority-store reads/writes and controller/target writes, including descendants, while the complete suite runs with inbound and outbound network denial. Notification remains simulated. Provider, publication, scheduling, paid fallback, automatic role launch, and target-remote operations remain unavailable.
+
+The proposed production authority location is `/Users/yuriy/Library/Application Support/AI Agent Radar Orchestrator/authority/`, but this implementation does not create or provision it. Real use requires later human setup after independent Analyst review, Architect acceptance, normal publication of the exact accepted controller commit, and a fresh authorization bound to that published commit. See [the activation-gate plan](docs/activation-gate-plan.md), [operator guide](docs/operator-guide.md), and [Builder handoff](docs/activation-gate-builder-handoff.md).
+
 Run it only under the network-denial boundary documented below:
 
 ```sh

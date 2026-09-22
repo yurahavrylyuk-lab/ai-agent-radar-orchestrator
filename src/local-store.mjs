@@ -5,7 +5,7 @@ import { parseJsonStrict } from "./contracts.mjs";
 import { appendEvent, canonicalEqual, validateEvent } from "./outbox.mjs";
 import { assertOwnership } from "./ownership.mjs";
 import { dequeue } from "./queue.mjs";
-import { validateCycle, validateIteration, validateMachineState, validateMachineStateV2, validateSummary } from "./validate.mjs";
+import { validateCycle, validateIteration, validateMachineState, validateStateByVersion, validateSummary } from "./validate.mjs";
 
 export class PersistenceDurabilityUncertainError extends Error {
   constructor(cause) {
@@ -231,7 +231,7 @@ export function admitNextCycle({ statePath, lockPath, claim, cycle, now, persist
 }
 
 export function initializeStateV2(filePath, state) {
-  validateMachineStateV2(state);
+  validateStateByVersion(state);
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
   const serialized = `${JSON.stringify(state, null, 2)}\n`; let fd = null;
   try {
@@ -246,7 +246,7 @@ export function mutateStateV2({ statePath, ownerId, ownerGeneration, mutator, pe
   const lock = acquireLock(lockPath, { controllerId: ownerId, generation: ownerGeneration, pid: process.pid });
   if (!lock.acquired) { const error = new Error(lock.reason); error.code = "STATE_LOCKED"; throw error; }
   try {
-    const state = readState(statePath); validateMachineStateV2(state);
+    const state = readState(statePath); validateStateByVersion(state);
     if (state.owner.id !== ownerId) throw new Error("WRONG_OWNER");
     if (state.owner.generation !== ownerGeneration) throw new Error("STALE_GENERATION");
     const originalVersion = state.stateVersion;
@@ -254,7 +254,7 @@ export function mutateStateV2({ statePath, ownerId, ownerGeneration, mutator, pe
     if (operation?.unchanged === true) return { state: structuredClone(state), value: operation.value, changed: false };
     const candidate = operation?.state ?? operation;
     if (!candidate || candidate.stateVersion !== originalVersion + 1) throw new Error("STATE_VERSION_MUST_ADVANCE_EXACTLY_ONCE");
-    validateMachineStateV2(candidate); replaceStateAtomic(statePath, candidate, persistenceOptions);
+    validateStateByVersion(candidate); replaceStateAtomic(statePath, candidate, persistenceOptions);
     return { state: structuredClone(candidate), value: operation?.value, changed: true };
   } finally { lock.release(); }
 }

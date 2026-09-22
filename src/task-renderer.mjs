@@ -37,7 +37,7 @@ export function createRoleTask(input) {
       scheduling: false,
     },
     createdAt: input.createdAt,
-    templateVersion: "gov-002-phase2-r3",
+    templateVersion: input.evidenceMode === "HUMAN_ASSISTED" ? "gov-002-activation-r1" : "gov-002-phase2-r3",
   };
   task.taskDigest = sha256Canonical(task);
   validateRoleTask(task);
@@ -81,6 +81,7 @@ export function renderTaskPrompt(task, state = null) {
       allowedOutcomes: ["COMPLETED", "BLOCKED"],
       blockedPayload: { code: "<stable code>", explanation: "<why the bounded task cannot proceed>", evidence: ["<local evidence>"] },
       completion: validationEvidence.some((item) => item.status === "PENDING_CHECKPOINT") ? "Complete the required controller checkpoint operation, then run next-task again before performing validation." : "Perform every required validation recipe, select its matching PASS or FAIL attestation option, and place that complete entry in the response envelope. Do not infer PASS from checkpoint identity evidence.",
+      roleBoundary: state?.schemaVersion === 3 ? { required: true, mechanism: state.authorityStore.boundary.mechanism, policyDigest: state.authorityStore.boundary.policyDigest, networkDenied: true, authorityStoreDenied: true, controllerWriteDenied: true, authoritativeTargetWriteDenied: true, descendantsDenied: true } : null,
     },
     executionContext: { workspace: workspace ? { workspaceId: workspace.workspaceId, role: workspace.role, root: workspace.root, expectedCommit: workspace.expectedCommit } : null, candidateCommit: task.binding.candidateCommit, reviewedCommit: task.binding.reviewedCommit, scope: task.authorization.scope, validationRequirements: task.authorization.validationRequirements, requiredValidationEvidence: validationEvidence, actionablePrecedingEvidence: task.previousEvidence.records },
     task,

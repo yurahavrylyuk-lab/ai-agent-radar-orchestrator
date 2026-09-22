@@ -3,7 +3,7 @@ import fs from "node:fs";
 import { PHASE2, sha256Canonical } from "./contracts.mjs";
 import { initializeStateV2, mutateStateV2, readState } from "./local-store.mjs";
 import { createRoleTask, emptyEvidence } from "./task-renderer.mjs";
-import { validateAuthorization, validateMachineStateV2 } from "./validate.mjs";
+import { validateAuthorization, validateMachineStateV2, validateStateByVersion } from "./validate.mjs";
 import { createIndependentWorkspace } from "./workspaces.mjs";
 
 export const REAL_TARGET_ROOT = "/Users/yuriy/Documents/IT Study/General/General/AI Agents/The AI Monitoring Agent";
@@ -86,7 +86,7 @@ export function registerWorkspace({ statePath, ownerId, ownerGeneration, taskId:
 }
 
 export function preparePendingWorkspace({ statePath, ownerId, ownerGeneration, taskId: id, runtimeRoot, now }) {
-  const state = readState(statePath); validateMachineStateV2(state);
+  const state = readState(statePath); validateStateByVersion(state);
   const task = state.tasks.find((item) => item.taskId === id); if (!task || state.pendingTaskId !== id) throw new Error("TASK_NOT_PENDING");
   if (!["builder", "analyst"].includes(task.role) || !task.binding.workspaceId) throw new Error("TASK_WORKSPACE_NOT_REQUIRED");
   const existing = state.workspaces.find((item) => item.taskId === id); if (existing) return { status: "ALREADY_PREPARED", workspace: structuredClone(existing) };
@@ -104,15 +104,15 @@ export function preparePendingWorkspace({ statePath, ownerId, ownerGeneration, t
 }
 
 export function controllerStatus(statePath) {
-  const state = readState(statePath); validateMachineStateV2(state);
+  const state = readState(statePath); validateStateByVersion(state);
   const cycle = state.cycles.find((item) => item.id === state.activeCycleId) ?? null;
   const task = state.tasks.find((item) => item.taskId === state.pendingTaskId) ?? null;
   const timing = task ? state.timings.find((item) => item.taskId === task.taskId) ?? null : null;
-  return { schemaVersion: 2, evidenceMode: state.evidenceMode, cycleId: state.activeCycleId, cycleStatus: cycle?.status ?? "IDLE", stage: cycle?.stage ?? null, pendingRole: task?.role ?? null, taskId: task?.taskId ?? null, roleStatus: timing?.status ?? (task ? "WAITING" : null), humanHold: state.humanHold, localCandidate: cycle?.candidateCommit ?? null, integrationStatus: cycle?.integrationStatus ?? null };
+  return { schemaVersion: state.schemaVersion, evidenceMode: state.evidenceMode, cycleId: state.activeCycleId, cycleStatus: cycle?.status ?? "IDLE", stage: cycle?.stage ?? null, pendingRole: task?.role ?? null, taskId: task?.taskId ?? null, roleStatus: timing?.status ?? (task ? "WAITING" : null), humanHold: state.humanHold, localCandidate: cycle?.candidateCommit ?? null, integrationStatus: cycle?.integrationStatus ?? null, authorizationStatus: state.schemaVersion === 3 ? state.authorizations[0]?.lifecycle.status ?? null : null };
 }
 
 export function newestSummary(statePath) {
-  const state = readState(statePath); validateMachineStateV2(state); return structuredClone(state.summaries.at(-1) ?? null);
+  const state = readState(statePath); validateStateByVersion(state); return structuredClone(state.summaries.at(-1) ?? null);
 }
 
 export function findCycle(state, cycleId) { const cycle = state.cycles.find((item) => item.id === cycleId); if (!cycle) throw new Error("CYCLE_NOT_FOUND"); return cycle; }
@@ -121,6 +121,10 @@ export function summaryDigest(summary) { return sha256Canonical(Object.fromEntri
 export function finalizeTerminalCycle(state, cycle, { status, stage, terminalReason, now, integration = null, humanHold = true }) {
   const id = `summary:${cycle.id}:final`; const existing = state.summaries.find((item) => item.id === id); if (existing) return existing;
   cycle.status = status; cycle.stage = stage; state.activeCycleId = null; state.pendingTaskId = null; state.humanHold = humanHold;
+  const authority = state.schemaVersion === 3 ? state.authorizations.find((item) => item.lifecycle.claimedCycleId === cycle.id) ?? null : null;
+  if (authority && terminalReason !== "INTEGRATED" && !["CLOSED", "RECONCILIATION_REQUIRED"].includes(authority.lifecycle.status)) {
+    const from = authority.lifecycle.status; authority.lifecycle.status = "CLOSED"; authority.lifecycle.transitionHistory.push({ from, to: "CLOSED", at: now, reason: terminalReason });
+  }
   const evidenceChain = [
     ...state.results.filter((item) => item.cycleId === cycle.id).map((item) => ({ type: "result", id: item.taskId, digest: item.resultDigest })),
     ...state.summaries.filter((item) => item.cycleId === cycle.id && item.type === "ITERATION").map((item) => ({ type: "summary", id: item.id, digest: item.digest })),
@@ -133,6 +137,23 @@ export function finalizeTerminalCycle(state, cycle, { status, stage, terminalRea
     integration: integration ?? { status: "NOT_ATTEMPTED", oldTip: null, newTip: null, scopeDigest: null },
     productionImpact: "NONE_FIXTURE_ONLY", risks: terminalReason === "INTEGRATED" ? [] : [terminalReason], createdAt: now,
   };
+  if (authority) {
+    unsigned.authorizationId = authority.grant.authorizationId;
+    unsigned.authorizationDigest = authority.grant.authorizationDigest;
+    unsigned.controllerCommit = authority.grant.controller.commit;
+    unsigned.requestId = authority.grant.requestId;
+    unsigned.baselineCommit = authority.grant.baselineCommit;
+    unsigned.protectedTargetSnapshot = structuredClone(authority.grant.targetSnapshot);
+    unsigned.candidateCommits = state.iterations.filter((item) => item.cycleId === cycle.id).map((item) => item.candidateCommit);
+    unsigned.analystReviews = state.reviews.filter((item) => item.cycleId === cycle.id).map((item) => structuredClone(item));
+    unsigned.validationAttestations = state.results.filter((item) => item.cycleId === cycle.id && Array.isArray(item.result.payload?.validation)).flatMap((item) => item.result.payload.validation.map((entry) => structuredClone(entry)));
+    unsigned.architectDecisions = state.results.filter((item) => item.cycleId === cycle.id && ["ARCHITECT_PLAN", "ARCHITECT_REVISION", "ARCHITECT_FINAL_DECISION"].includes(item.purpose)).map((item) => ({ purpose: item.purpose, resultDigest: item.resultDigest, decision: item.result.payload?.decision ?? null }));
+    unsigned.integrationIntent = structuredClone(state.integrationIntents.find((item) => item.cycleId === cycle.id) ?? null);
+    unsigned.changedPath = authority.grant.allowedChanges[0].path;
+    unsigned.protectedTargetComparison = { status: terminalReason === "INTEGRATED" ? "PREEXISTING_FILES_AND_REFS_VERIFIED" : "NO_TARGET_MUTATION", expectedBaseline: authority.grant.baselineCommit, resultingTip: integration?.newTip ?? authority.grant.baselineCommit };
+    unsigned.productionImpact = terminalReason === "INTEGRATED" ? "LOCAL_SELF_IMPROVEMENT_BRANCH_ONLY" : "NONE";
+    unsigned.limitations = ["No target remote push", "Notification delivery remains simulated", "Human-attested validation is not independently executed by the controller"];
+  }
   const summary = { ...unsigned, digest: summaryDigest(unsigned) }; state.summaries.push(summary);
   state.outbox.push({ id: `${state.repositoryId}:${cycle.id}:final`, status: "SIMULATED_ACCEPTED", payload: { summaryId: summary.id, summaryDigest: summary.digest, simulated: true } });
   return summary;

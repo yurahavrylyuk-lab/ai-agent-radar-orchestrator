@@ -1,4 +1,4 @@
-import { CYCLE_STATES, PHASE2, REVIEW_STATES, sha256Canonical } from "./contracts.mjs";
+import { CYCLE_STATES, PHASE2, REVIEW_STATES, sha256Bytes, sha256Canonical } from "./contracts.mjs";
 import { validateRequiredValidationEvidence } from "./validation-evidence.mjs";
 
 function object(value, name) {
@@ -323,13 +323,54 @@ export function validateReceipt(value) {
   string(value.receiptId, "receipt.receiptId"); string(value.taskId, "receipt.taskId"); digest(value.taskDigest, "receipt.taskDigest"); digest(value.resultDigest, "receipt.resultDigest"); utcTimestamp(value.acceptedAt, "receipt.acceptedAt"); integer(value.stateVersion, "receipt.stateVersion", 1); oneOf(value.status, ["ACCEPTED", "IDEMPOTENT_REPLAY"], "receipt.status"); return true;
 }
 export function validateIntegrationIntent(value) {
-  const fields = ["schemaVersion", "intentId", "repositoryId", "cycleId", "targetRoot", "targetBranch", "oldTip", "newTip", "candidateTree", "scopeDigest", "approvalId", "reviewResultDigest", "architectResultDigest", "status", "createdAt"];
-  exactRecord(value, fields, "integrationIntent"); if (value.schemaVersion !== 2) throw new TypeError("integrationIntent.schemaVersion must be 2");
-  for (const field of ["intentId", "repositoryId", "cycleId", "targetRoot", "targetBranch", "approvalId"]) string(value[field], `integrationIntent.${field}`);
+  const authorizationFields = value.schemaVersion === 3 ? ["authorizationId", "authorizationDigest"] : ["approvalId"];
+  const fields = ["schemaVersion", "intentId", ...authorizationFields, "repositoryId", "cycleId", "targetRoot", "targetBranch", "oldTip", "newTip", "candidateTree", "scopeDigest", "reviewResultDigest", "architectResultDigest", "status", "createdAt"];
+  exactRecord(value, fields, "integrationIntent"); if (![2, 3].includes(value.schemaVersion)) throw new TypeError("integrationIntent.schemaVersion must be 2 or 3");
+  for (const field of ["intentId", "repositoryId", "cycleId", "targetRoot", "targetBranch", ...authorizationFields.filter((item) => item !== "authorizationDigest")]) string(value[field], `integrationIntent.${field}`);
+  if (value.schemaVersion === 3) digest(value.authorizationDigest, "integrationIntent.authorizationDigest");
   if (value.targetBranch !== PHASE2.pilotBranch) throw new TypeError(`integrationIntent.targetBranch must be ${PHASE2.pilotBranch}`);
   for (const field of ["oldTip", "newTip", "candidateTree"]) oid(value[field], `integrationIntent.${field}`);
   for (const field of ["scopeDigest", "reviewResultDigest", "architectResultDigest"]) digest(value[field], `integrationIntent.${field}`);
   oneOf(value.status, ["PREPARED", "APPLIED", "RECONCILIATION_REQUIRED"], "integrationIntent.status"); utcTimestamp(value.createdAt, "integrationIntent.createdAt"); return true;
+}
+
+export function validatePilotRequest(value) {
+  const fields = ["schemaVersion", "requestId", "repositoryId", "targetRoot", "targetBranch", "baselineCommit", "evidenceMode", "createdAt"];
+  exactRecord(value, fields, "pilotRequest");
+  if (value.schemaVersion !== 1) throw new TypeError("pilotRequest.schemaVersion must be 1");
+  for (const field of ["requestId", "repositoryId", "targetRoot"]) string(value[field], `pilotRequest.${field}`);
+  if (value.targetBranch !== PHASE2.pilotBranch || value.evidenceMode !== "HUMAN_ASSISTED") throw new TypeError("pilotRequest mode or branch is invalid");
+  oid(value.baselineCommit, "pilotRequest.baselineCommit"); utcTimestamp(value.createdAt, "pilotRequest.createdAt"); return true;
+}
+
+function validateProtectedRefs(value, name) {
+  exactRecord(value, ["head", "selfImprovement", "originSelfImprovement", "main", "originMain"], name);
+  for (const field of ["head", "selfImprovement", "originSelfImprovement", "main", "originMain"]) oid(value[field], `${name}.${field}`);
+}
+
+export function validatePilotAuthorizationGrant(value) {
+  const fields = ["schemaVersion", "authorizationId", "approval", "controller", "authorityStoreId", "repositoryId", "canonicalTargetRoot", "targetBranch", "baselineCommit", "targetSnapshot", "requestId", "requestDigest", "cycleId", "evidenceMode", "allowedChanges", "contentRestrictions", "validationRequirements", "maxRuntimeIterations", "maxSuccessfulIntegrations", "issuedAt", "authorizationDigest"];
+  exactRecord(value, fields, "pilotAuthorization"); if (value.schemaVersion !== 1) throw new TypeError("pilotAuthorization.schemaVersion must be 1");
+  for (const field of ["authorizationId", "repositoryId", "canonicalTargetRoot", "requestId", "cycleId"]) string(value[field], `pilotAuthorization.${field}`);
+  exactRecord(value.approval, ["source", "reference", "statement", "statementDigest", "confirmedAt"], "pilotAuthorization.approval");
+  if (value.approval.source !== "HUMAN_OPERATOR") throw new TypeError("pilotAuthorization.approval.source is invalid");
+  for (const field of ["reference", "statement"]) string(value.approval[field], `pilotAuthorization.approval.${field}`); digest(value.approval.statementDigest, "pilotAuthorization.approval.statementDigest"); utcTimestamp(value.approval.confirmedAt, "pilotAuthorization.approval.confirmedAt");
+  const expectedStatement = `I explicitly authorize one HUMAN_ASSISTED GOV-002 pilot for request ${value.requestId} and cycle cycle:${value.requestId} to ADD ${PHASE2.pilotPath} with a maximum of 800 words, using included subscription capacity only and no paid fallback.`;
+  if (value.approval.statement !== expectedStatement || value.approval.statementDigest !== sha256Bytes(value.approval.statement)) throw new TypeError("pilotAuthorization approval statement or digest mismatch");
+  exactRecord(value.controller, ["canonicalRoot", "commit", "tree", "approvedOrigin"], "pilotAuthorization.controller"); string(value.controller.canonicalRoot, "pilotAuthorization.controller.canonicalRoot"); oid(value.controller.commit, "pilotAuthorization.controller.commit"); oid(value.controller.tree, "pilotAuthorization.controller.tree"); string(value.controller.approvedOrigin, "pilotAuthorization.controller.approvedOrigin");
+  digest(value.authorityStoreId, "pilotAuthorization.authorityStoreId"); oid(value.baselineCommit, "pilotAuthorization.baselineCommit"); digest(value.requestDigest, "pilotAuthorization.requestDigest"); digest(value.authorizationDigest, "pilotAuthorization.authorizationDigest");
+  if (value.targetBranch !== PHASE2.pilotBranch || value.evidenceMode !== "HUMAN_ASSISTED" || value.maxRuntimeIterations !== 3 || value.maxSuccessfulIntegrations !== 1) throw new TypeError("pilotAuthorization fixed policy mismatch");
+  if (value.cycleId !== `cycle:${value.requestId}` || value.authorizationId !== `authorization:${value.requestDigest.slice(0, 24)}`) throw new TypeError("pilotAuthorization derived identity mismatch");
+  exactRecord(value.targetSnapshot, ["manifestDigest", "modesDigest", "configDigest", "indexDigest", "fileCount", "gitDirectoryIdentity", "protectedRefs"], "pilotAuthorization.targetSnapshot");
+  for (const field of ["manifestDigest", "modesDigest", "configDigest", "indexDigest"]) digest(value.targetSnapshot[field], `pilotAuthorization.targetSnapshot.${field}`); integer(value.targetSnapshot.fileCount, "pilotAuthorization.targetSnapshot.fileCount", 1); validateProtectedRefs(value.targetSnapshot.protectedRefs, "pilotAuthorization.targetSnapshot.protectedRefs");
+  if (value.targetSnapshot.protectedRefs.head !== value.baselineCommit || value.targetSnapshot.protectedRefs.selfImprovement !== value.baselineCommit || value.targetSnapshot.protectedRefs.originSelfImprovement !== value.baselineCommit || value.targetSnapshot.protectedRefs.main !== value.targetSnapshot.protectedRefs.originMain) throw new TypeError("pilotAuthorization protected refs mismatch");
+  exactRecord(value.targetSnapshot.gitDirectoryIdentity, ["canonicalPath", "device", "inode"], "pilotAuthorization.targetSnapshot.gitDirectoryIdentity"); string(value.targetSnapshot.gitDirectoryIdentity.canonicalPath, "pilotAuthorization.targetSnapshot.gitDirectoryIdentity.canonicalPath"); integer(value.targetSnapshot.gitDirectoryIdentity.device, "pilotAuthorization.targetSnapshot.gitDirectoryIdentity.device"); integer(value.targetSnapshot.gitDirectoryIdentity.inode, "pilotAuthorization.targetSnapshot.gitDirectoryIdentity.inode");
+  if (!Array.isArray(value.allowedChanges) || value.allowedChanges.length !== 1) throw new TypeError("pilotAuthorization.allowedChanges must contain exactly one entry"); validateAllowedChange(value.allowedChanges[0], "pilotAuthorization.allowedChanges[0]"); if (value.allowedChanges[0].path !== PHASE2.pilotPath || value.allowedChanges[0].operation !== "ADD") throw new TypeError("pilotAuthorization allowed change is invalid");
+  exactRecord(value.contentRestrictions, ["maxWords", "required", "prohibited"], "pilotAuthorization.contentRestrictions"); if (value.contentRestrictions.maxWords !== 800) throw new TypeError("pilotAuthorization word limit is invalid"); strings(value.contentRestrictions.required, "pilotAuthorization.contentRestrictions.required"); strings(value.contentRestrictions.prohibited, "pilotAuthorization.contentRestrictions.prohibited");
+  if (sha256Canonical(value.contentRestrictions.required) !== sha256Canonical(["fictional", "offline", "non-governance", "non-production", "non-operational"]) || sha256Canonical(value.contentRestrictions.prohibited) !== sha256Canonical(["credentials", "secrets", "provider instructions", "deployment instructions", "billing instructions"])) throw new TypeError("pilotAuthorization content policy mismatch");
+  if (!Array.isArray(value.validationRequirements) || value.validationRequirements.length === 0) throw new TypeError("pilotAuthorization.validationRequirements must be non-empty"); value.validationRequirements.forEach((item, index) => validateRule(item, `pilotAuthorization.validationRequirements[${index}]`)); unique(value.validationRequirements, (item) => item.id, "pilotAuthorization.validationRequirements"); utcTimestamp(value.issuedAt, "pilotAuthorization.issuedAt");
+  const unsigned = structuredClone(value); delete unsigned.authorizationDigest; if (sha256Canonical(unsigned) !== value.authorizationDigest) throw new TypeError("pilotAuthorization.authorizationDigest mismatch");
+  return true;
 }
 
 const STATE_V2_FIELDS = ["schemaVersion", "controllerId", "repositoryId", "evidenceMode", "stateVersion", "owner", "queue", "activeCycleId", "humanHold", "approval", "capabilities", "cycles", "plans", "tasks", "pendingTaskId", "results", "receipts", "iterations", "reviews", "summaries", "outbox", "workspaces", "timings", "checkpointIntents", "checkpointReceipts", "integrationIntents", "integrationOutcomes", "migration"];
@@ -366,9 +407,66 @@ export function validateMachineStateV2(value) {
   if (value.migration !== null) { exactRecord(value.migration, ["sourceSchemaVersion", "sourceDigest", "sourceEvidencePath", "migratedAt"], "machineStateV2.migration"); integer(value.migration.sourceSchemaVersion, "migration.sourceSchemaVersion", 1); digest(value.migration.sourceDigest, "migration.sourceDigest"); string(value.migration.sourceEvidencePath, "migration.sourceEvidencePath"); utcTimestamp(value.migration.migratedAt, "migration.migratedAt"); }
   return true;
 }
+
+const AUTHORITY_STATE_FIELDS = [...STATE_V2_FIELDS, "authorityStateVersion", "authorityStore", "authorizations", "admissionReceipts"];
+function validateBoundaryEvidence(value) {
+  const fields = ["schemaVersion", "mechanism", "policyDigest", "networkDenied", "authorityReadDenied", "authorityWriteDenied", "controllerWriteDenied", "targetWriteDenied", "descendantsDenied", "verifiedAt"];
+  exactRecord(value, fields, "authorityStore.boundary"); if (value.schemaVersion !== 1) throw new TypeError("authorityStore.boundary.schemaVersion must be 1"); string(value.mechanism, "authorityStore.boundary.mechanism"); digest(value.policyDigest, "authorityStore.boundary.policyDigest"); utcTimestamp(value.verifiedAt, "authorityStore.boundary.verifiedAt");
+  for (const field of ["networkDenied", "authorityReadDenied", "authorityWriteDenied", "controllerWriteDenied", "targetWriteDenied", "descendantsDenied"]) if (value[field] !== true) throw new TypeError(`authorityStore.boundary.${field} must be true`);
+}
+function validateLifecycle(value, grant, name) {
+  const fields = ["authorizationId", "authorizationDigest", "status", "claimedRequestId", "claimedCycleId", "integrationIntentId", "integratedCommit", "transitionHistory"];
+  exactRecord(value, fields, name); if (value.authorizationId !== grant.authorizationId || value.authorizationDigest !== grant.authorizationDigest) throw new TypeError(`${name} grant identity mismatch`);
+  oneOf(value.status, ["ISSUED", "CLAIMED", "INTEGRATING", "CONSUMED", "CLOSED", "RECONCILIATION_REQUIRED"], `${name}.status`);
+  for (const field of ["claimedRequestId", "claimedCycleId", "integrationIntentId"]) nullableString(value[field], `${name}.${field}`); oid(value.integratedCommit, `${name}.integratedCommit`, true);
+  if (!Array.isArray(value.transitionHistory) || value.transitionHistory.length === 0) throw new TypeError(`${name}.transitionHistory must be non-empty`);
+  value.transitionHistory.forEach((item, index) => { const n = `${name}.transitionHistory[${index}]`; exactRecord(item, ["from", "to", "at", "reason"], n); if (item.from !== null) oneOf(item.from, ["ISSUED", "CLAIMED", "INTEGRATING", "CONSUMED", "CLOSED", "RECONCILIATION_REQUIRED"], `${n}.from`); oneOf(item.to, ["ISSUED", "CLAIMED", "INTEGRATING", "CONSUMED", "CLOSED", "RECONCILIATION_REQUIRED"], `${n}.to`); utcTimestamp(item.at, `${n}.at`); string(item.reason, `${n}.reason`); if (index > 0 && item.from !== value.transitionHistory[index - 1].to) throw new TypeError(`${n} is not contiguous`); });
+  if (value.transitionHistory.at(-1).to !== value.status) throw new TypeError(`${name}.status does not match transition history`);
+  if (value.status !== "ISSUED" && (value.claimedRequestId !== grant.requestId || value.claimedCycleId !== grant.cycleId)) throw new TypeError(`${name} claim binding is invalid`);
+  if (value.status === "ISSUED" && [value.claimedRequestId, value.claimedCycleId, value.integrationIntentId, value.integratedCommit].some((item) => item !== null)) throw new TypeError(`${name} issued authorization contains consumption metadata`);
+  if (["INTEGRATING", "CONSUMED", "RECONCILIATION_REQUIRED"].includes(value.status) && value.integrationIntentId === null) throw new TypeError(`${name}.integrationIntentId is required`);
+  if (value.status === "CONSUMED" && value.integratedCommit === null) throw new TypeError(`${name}.integratedCommit is required`);
+}
+
+export function validateAuthorityState(value, statePath = null) {
+  exactRecord(value, AUTHORITY_STATE_FIELDS, "authorityState"); if (value.schemaVersion !== 3 || value.authorityStateVersion !== 1) throw new TypeError("authority state version is invalid");
+  if (value.evidenceMode !== "HUMAN_ASSISTED") throw new TypeError("authorityState.evidenceMode must be HUMAN_ASSISTED");
+  exactRecord(value.capabilities, ["realPilotActivation", "liveProviders", "network", "publication", "scheduling"], "authorityState.capabilities"); if (value.capabilities.realPilotActivation !== true) throw new TypeError("authorityState.realPilotActivation must be true"); for (const field of ["liveProviders", "network", "publication", "scheduling"]) if (value.capabilities[field] !== false) throw new TypeError(`authorityState.capabilities.${field} must be false`);
+  exactRecord(value.authorityStore, ["canonicalStatePath", "canonicalRoot", "authorityStoreId", "boundary"], "authorityStore"); string(value.authorityStore.canonicalStatePath, "authorityStore.canonicalStatePath"); string(value.authorityStore.canonicalRoot, "authorityStore.canonicalRoot"); digest(value.authorityStore.authorityStoreId, "authorityStore.authorityStoreId"); validateBoundaryEvidence(value.authorityStore.boundary); if (statePath !== null && value.authorityStore.canonicalStatePath !== statePath) throw new TypeError("authorityStore canonical state path mismatch");
+  if (!Array.isArray(value.authorizations) || value.authorizations.length === 0) throw new TypeError("authorityState.authorizations must be non-empty");
+  value.authorizations.forEach((record, index) => { const n = `authorizations[${index}]`; exactRecord(record, ["grant", "lifecycle"], n); validatePilotAuthorizationGrant(record.grant); if (record.grant.authorityStoreId !== value.authorityStore.authorityStoreId || record.grant.repositoryId !== value.repositoryId) throw new TypeError(`${n} store or repository mismatch`); validateLifecycle(record.lifecycle, record.grant, `${n}.lifecycle`); });
+  unique(value.authorizations, (item) => item.grant.authorizationId, "authorityState.authorizations");
+  if (!Array.isArray(value.admissionReceipts)) throw new TypeError("authorityState.admissionReceipts must be an array"); value.admissionReceipts.forEach((item, index) => { const n = `admissionReceipts[${index}]`; exactRecord(item, ["receiptId", "authorizationId", "authorizationDigest", "requestId", "requestDigest", "cycleId", "taskId", "claimedAt"], n); for (const field of ["receiptId", "authorizationId", "requestId", "cycleId", "taskId"]) string(item[field], `${n}.${field}`); digest(item.authorizationDigest, `${n}.authorizationDigest`); digest(item.requestDigest, `${n}.requestDigest`); utcTimestamp(item.claimedAt, `${n}.claimedAt`); const record = value.authorizations.find((candidate) => candidate.grant.authorizationId === item.authorizationId); if (!record || record.grant.authorizationDigest !== item.authorizationDigest || record.grant.requestDigest !== item.requestDigest || record.grant.cycleId !== item.cycleId) throw new TypeError(`${n} authorization relationship is invalid`); }); unique(value.admissionReceipts, (item) => item.authorizationId, "authorityState.admissionReceipts");
+  const base = structuredClone(value); for (const field of ["authorityStateVersion", "authorityStore", "authorizations", "admissionReceipts"]) delete base[field]; base.schemaVersion = 2; base.capabilities.realPilotActivation = false;
+  base.integrationIntents = base.integrationIntents.map((item) => item.schemaVersion === 3 ? { schemaVersion: 2, intentId: item.intentId, repositoryId: item.repositoryId, cycleId: item.cycleId, targetRoot: item.targetRoot, targetBranch: item.targetBranch, oldTip: item.oldTip, newTip: item.newTip, candidateTree: item.candidateTree, scopeDigest: item.scopeDigest, approvalId: item.authorizationId, reviewResultDigest: item.reviewResultDigest, architectResultDigest: item.architectResultDigest, status: item.status, createdAt: item.createdAt } : item);
+  const activationSummaryFields = ["authorizationId", "authorizationDigest", "controllerCommit", "requestId", "baselineCommit", "protectedTargetSnapshot", "candidateCommits", "analystReviews", "validationAttestations", "architectDecisions", "integrationIntent", "changedPath", "protectedTargetComparison", "limitations"];
+  const projectedSummaryDigests = new Map();
+  base.summaries = base.summaries.map((item) => {
+    if (item.type !== "FINAL" || item.evidenceMode !== "HUMAN_ASSISTED") return item;
+    const legacy = structuredClone(item); for (const field of activationSummaryFields) delete legacy[field]; delete legacy.digest; legacy.digest = sha256Canonical(legacy); projectedSummaryDigests.set(item.id, legacy.digest); return legacy;
+  });
+  base.outbox = base.outbox.map((item) => projectedSummaryDigests.has(item.payload.summaryId) ? { ...item, payload: { ...item.payload, summaryDigest: projectedSummaryDigests.get(item.payload.summaryId) } } : item);
+  validateMachineStateV2(base);
+  if (value.integrationIntents.some((item) => item.schemaVersion !== 3)) throw new TypeError("authority state integration intents must use schemaVersion 3");
+  value.integrationIntents.forEach(validateIntegrationIntent);
+  value.summaries.filter((item) => item.type === "FINAL" && item.evidenceMode === "HUMAN_ASSISTED").forEach((item, index) => {
+    const n = `authorityFinalSummaries[${index}]`; for (const field of activationSummaryFields) if (!(field in item)) throw new TypeError(`${n} is missing field: ${field}`);
+    for (const field of ["authorizationId", "requestId", "changedPath"]) string(item[field], `${n}.${field}`); digest(item.authorizationDigest, `${n}.authorizationDigest`); oid(item.controllerCommit, `${n}.controllerCommit`); oid(item.baselineCommit, `${n}.baselineCommit`); strings(item.limitations, `${n}.limitations`);
+    exactRecord(item.protectedTargetComparison, ["status", "expectedBaseline", "resultingTip"], `${n}.protectedTargetComparison`); string(item.protectedTargetComparison.status, `${n}.protectedTargetComparison.status`); oid(item.protectedTargetComparison.expectedBaseline, `${n}.protectedTargetComparison.expectedBaseline`); oid(item.protectedTargetComparison.resultingTip, `${n}.protectedTargetComparison.resultingTip`);
+    if (!Array.isArray(item.candidateCommits) || !Array.isArray(item.analystReviews) || !Array.isArray(item.validationAttestations) || !Array.isArray(item.architectDecisions)) throw new TypeError(`${n} review evidence must be arrays`);
+    item.candidateCommits.forEach((commit, commitIndex) => oid(commit, `${n}.candidateCommits[${commitIndex}]`));
+    item.architectDecisions.forEach((decision, decisionIndex) => { const d = `${n}.architectDecisions[${decisionIndex}]`; exactRecord(decision, ["purpose", "resultDigest", "decision"], d); oneOf(decision.purpose, ["ARCHITECT_PLAN", "ARCHITECT_REVISION", "ARCHITECT_FINAL_DECISION"], `${d}.purpose`); digest(decision.resultDigest, `${d}.resultDigest`); if (decision.decision !== null) oneOf(decision.decision, ARCHITECT_DECISIONS, `${d}.decision`); });
+    object(item.protectedTargetSnapshot, `${n}.protectedTargetSnapshot`); if (item.integrationIntent !== null) validateIntegrationIntent(item.integrationIntent);
+    const unsigned = structuredClone(item); delete unsigned.digest; if (sha256Canonical(unsigned) !== item.digest) throw new TypeError(`${n}.digest mismatch`);
+  });
+  for (const event of value.outbox) if (!value.summaries.some((summary) => summary.id === event.payload.summaryId && summary.digest === event.payload.summaryDigest)) throw new TypeError("authority outbox references missing summary evidence");
+  if (value.activeCycleId !== null) { const active = value.authorizations.find((item) => item.lifecycle.claimedCycleId === value.activeCycleId); if (!active || !["CLAIMED", "INTEGRATING", "RECONCILIATION_REQUIRED"].includes(active.lifecycle.status)) throw new TypeError("active real cycle lacks claimed authorization"); }
+  return true;
+}
 export function validateStateByVersion(value) {
   object(value, "state");
   if (value.schemaVersion === 1) return validateMachineState(value);
   if (value.schemaVersion === 2) return validateMachineStateV2(value);
+  if (value.schemaVersion === 3) return validateAuthorityState(value);
   throw new TypeError("UNKNOWN_STATE_SCHEMA_VERSION");
 }
