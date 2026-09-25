@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { finalizeTerminalCycle } from "./coordinator.mjs";
+import { sha256Canonical } from "./contracts.mjs";
 import { verifyBoundControllerIdentity } from "./controller-identity.mjs";
 import { changedFiles, commitMetadata, currentBranch, git, resolveCommit, statusPorcelain, verifyPilotCandidate } from "./git-evidence.mjs";
 import { acquireLock, mutateStateV2, readState } from "./local-store.mjs";
@@ -40,23 +41,60 @@ function requireIntegrationEligibility(state, cycleId, expected = null) {
 function verifyTargetPreconditions(grant) {
   const targetRoot = fs.realpathSync(grant.canonicalTargetRoot);
   const targetGitDirectory = fs.realpathSync(path.resolve(targetRoot, git(targetRoot, ["rev-parse", "--git-dir"]).stdout.trim())); const targetGitDirectoryStat = fs.lstatSync(targetGitDirectory); if (targetGitDirectory !== grant.targetSnapshot.gitDirectoryIdentity.canonicalPath || targetGitDirectoryStat.dev !== grant.targetSnapshot.gitDirectoryIdentity.device || targetGitDirectoryStat.ino !== grant.targetSnapshot.gitDirectoryIdentity.inode) throw new Error("TARGET_GIT_DIRECTORY_IDENTITY_MISMATCH");
-  if (currentBranch(targetRoot) !== grant.targetBranch || resolveCommit(targetRoot, `refs/heads/${grant.targetBranch}`) !== grant.baselineCommit || statusPorcelain(targetRoot) !== "") throw new Error("TARGET_PRECONDITION_FAILED");
+  if (currentBranch(targetRoot) !== grant.targetBranch || resolveCommit(targetRoot, `refs/heads/${grant.targetBranch}`) !== grant.baselineCommit) throw new Error("TARGET_PRECONDITION_FAILED");
   if (resolveCommit(targetRoot, "refs/heads/main") !== grant.targetSnapshot.protectedRefs.main || resolveCommit(targetRoot, "refs/remotes/origin/main") !== grant.targetSnapshot.protectedRefs.originMain || resolveCommit(targetRoot, `refs/remotes/origin/${grant.targetBranch}`) !== grant.targetSnapshot.protectedRefs.originSelfImprovement) throw new Error("PROTECTED_REFS_CHANGED");
   if (fs.existsSync(path.join(targetRoot, grant.allowedChanges[0].path))) throw new Error("PILOT_PATH_ALREADY_EXISTS");
   const before = captureTargetSnapshot(targetRoot);
   assertSemanticIndexInvariant(before);
+  if (statusPorcelain(targetRoot) !== "") throw new Error("TARGET_PRECONDITION_FAILED");
   if (before.manifestDigest !== grant.targetSnapshot.manifestDigest || before.modesDigest !== grant.targetSnapshot.modesDigest || before.configDigest !== grant.targetSnapshot.configDigest || before.semanticIndex.format !== grant.targetSnapshot.semanticIndex.format || before.semanticIndex.digest !== grant.targetSnapshot.semanticIndex.digest || before.semanticIndex.entryCount !== grant.targetSnapshot.semanticIndex.entryCount) throw new Error("TARGET_SNAPSHOT_MISMATCH");
   return { targetRoot, before };
 }
 
-function assertPreexistingPreserved(before, after, allowedPath) {
-  const beforeFiles = new Map(before.manifest.map((item) => [item.path, item.sha256]));
-  const beforeModes = new Map(before.modes.map((item) => [item.path, item.mode]));
-  for (const item of after.manifest) {
-    if (item.path === allowedPath) continue;
-    if (beforeFiles.get(item.path) !== item.sha256 || beforeModes.get(item.path) !== after.modes.find((mode) => mode.path === item.path)?.mode) throw new Error("PREEXISTING_TARGET_CONTENT_CHANGED");
-  }
-  if (after.manifest.length !== before.manifest.length + 1 || !after.manifest.some((item) => item.path === allowedPath)) throw new Error("INTEGRATION_CHANGED_PATH_SET_INVALID");
+function checkoutEvidence(snapshot, pilotPathAbsent) {
+  return {
+    head: snapshot.head,
+    symbolicHead: snapshot.symbolicHead,
+    semanticIndex: structuredClone(snapshot.semanticIndex),
+    manifestDigest: snapshot.manifestDigest,
+    modesDigest: snapshot.modesDigest,
+    configDigest: snapshot.configDigest,
+    gitDirectoryIdentity: structuredClone(snapshot.gitDirectoryIdentity),
+    statusDigest: snapshot.statusDigest,
+    statusPorcelainV1Base64: snapshot.statusPorcelainV1Base64,
+    fileCount: snapshot.manifest.length,
+    pilotPathAbsent,
+  };
+}
+
+function refsByName(snapshot) {
+  return new Map(snapshot.refs.trim().split("\n").filter(Boolean).map((line) => { const separator = line.lastIndexOf(" "); return [line.slice(0, separator), line.slice(separator + 1)]; }));
+}
+
+function assertRefOnlyCheckoutPreserved({ before, after, grant, candidate, intent }) {
+  const updatedRef = `refs/heads/${grant.targetBranch}`;
+  const beforeRefs = refsByName(before); const afterRefs = refsByName(after);
+  if (beforeRefs.size !== afterRefs.size) throw new Error("UNEXPECTED_REF_SET_CHANGE");
+  for (const [name, oid] of beforeRefs) if (afterRefs.get(name) !== (name === updatedRef ? intent.newTip : oid)) throw new Error("UNEXPECTED_REF_CHANGE");
+  if (before.head !== intent.oldTip || after.head !== intent.newTip || before.symbolicHead !== updatedRef || after.symbolicHead !== updatedRef) throw new Error("REF_ONLY_HEAD_IDENTITY_MISMATCH");
+  if (after.semanticIndex.format !== before.semanticIndex.format || after.semanticIndex.digest !== before.semanticIndex.digest || after.semanticIndex.entryCount !== before.semanticIndex.entryCount) throw new Error("PRESERVED_INDEX_SEMANTICS_CHANGED");
+  if (after.semanticIndex.equalsHeadTree || !after.semanticIndex.ordinaryFlagsOnly || after.semanticIndex.cachedDiffEmpty) throw new Error("EXPECTED_UNSYNCHRONIZED_INDEX_STATE_MISSING");
+  if (after.manifestDigest !== before.manifestDigest || after.modesDigest !== before.modesDigest || after.configDigest !== before.configDigest || after.manifest.length !== before.manifest.length) throw new Error("PRESERVED_CHECKOUT_CHANGED");
+  if (JSON.stringify(after.gitDirectoryIdentity) !== JSON.stringify(before.gitDirectoryIdentity)) throw new Error("TARGET_GIT_DIRECTORY_IDENTITY_MISMATCH");
+  if (fs.existsSync(path.join(grant.canonicalTargetRoot, grant.allowedChanges[0].path))) throw new Error("PILOT_PATH_UNEXPECTEDLY_SYNCHRONIZED");
+  const expectedStatus = Buffer.from(`D  ${grant.allowedChanges[0].path}\0`, "utf8").toString("base64");
+  if (after.statusPorcelainV1Base64 !== expectedStatus) throw new Error("UNSYNCHRONIZED_CHECKOUT_STATUS_MISMATCH");
+  if (commitMetadata(grant.canonicalTargetRoot, intent.newTip).tree !== intent.candidateTree || candidate.tree !== intent.candidateTree || candidate.scopeDigest !== intent.scopeDigest) throw new Error("INTEGRATED_COMMIT_IDENTITY_CHANGED");
+  return {
+    schemaVersion: 1,
+    status: "REF_ADVANCED_CHECKOUT_PRESERVED",
+    synchronizedToNewHead: false,
+    destructiveCheckoutPerformed: false,
+    synchronizationRequirement: "SEPARATE_HUMAN_CONTROLLED_ACTION_REQUIRED",
+    preIntegration: checkoutEvidence(before, true),
+    integratedBranch: { targetBranch: grant.targetBranch, symbolicHead: updatedRef, updatedRef, expectedOldTip: intent.oldTip, newTip: intent.newTip, candidateTree: intent.candidateTree, scopeDigest: intent.scopeDigest, reviewResultDigest: intent.reviewResultDigest, architectResultDigest: intent.architectResultDigest },
+    postIntegration: checkoutEvidence(after, true),
+  };
 }
 
 function reconcile({ statePath, ownerId, ownerGeneration, intentId, cycleId, targetRoot, branch, now }) {
@@ -73,7 +111,7 @@ function reconcile({ statePath, ownerId, ownerGeneration, intentId, cycleId, tar
   } catch { /* the durable intent remains the source of uncertainty */ }
 }
 
-export function integrateRealCandidate({ statePath, cycleId, controllerRoot = process.cwd(), now = new Date().toISOString(), inject = null, testBeforeLockedRecheck = null }) {
+export function integrateRealCandidate({ statePath, cycleId, controllerRoot = process.cwd(), now = new Date().toISOString(), inject = null, testBeforeLockedRecheck = null, testBeforeRefRecheck = null }) {
   const initial = readState(statePath);
   const cycleRecord = initial.cycles.find((item) => item.id === cycleId); if (!cycleRecord) throw new Error("CYCLE_NOT_FOUND");
   const authorizationRecord = initial.authorizations.find((item) => item.lifecycle.claimedCycleId === cycleId); if (!authorizationRecord) throw new Error("CLAIMED_AUTHORIZATION_REQUIRED");
@@ -100,7 +138,7 @@ export function integrateRealCandidate({ statePath, cycleId, controllerRoot = pr
     testBeforeLockedRecheck();
   }
   const intentId = `real-integration:${grant.authorizationId}`;
-  const intent = { schemaVersion: 3, intentId, authorizationId: grant.authorizationId, authorizationDigest: grant.authorizationDigest, repositoryId: grant.repositoryId, cycleId, targetRoot, targetBranch: grant.targetBranch, oldTip: grant.baselineCommit, newTip: cycle.candidateCommit, candidateTree: candidate.tree, scopeDigest: candidate.scopeDigest, reviewResultDigest: approved.review.resultDigest, architectResultDigest: cycle.architectResultDigest, status: "PREPARED", createdAt: now };
+  const intent = { schemaVersion: 4, intentId, authorizationId: grant.authorizationId, authorizationDigest: grant.authorizationDigest, repositoryId: grant.repositoryId, cycleId, targetRoot, targetBranch: grant.targetBranch, oldTip: grant.baselineCommit, newTip: cycle.candidateCommit, candidateTree: candidate.tree, scopeDigest: candidate.scopeDigest, reviewResultDigest: approved.review.resultDigest, architectResultDigest: cycle.architectResultDigest, checkoutBaseline: checkoutEvidence(before, true), status: "PREPARED", createdAt: now };
   mutateStateV2({ statePath, ownerId: initial.owner.id, ownerGeneration: initial.owner.generation, mutator(state) {
     validateAuthorityState(state, statePath);
     assertTrustedAuthoritySource({ statePath, targetRoot: cycle.targetRoot, stored: state.authorityStore });
@@ -108,7 +146,7 @@ export function integrateRealCandidate({ statePath, cycleId, controllerRoot = pr
     assertTrustedAuthoritySource({ statePath, targetRoot: locked.grant.canonicalTargetRoot, stored: state.authorityStore });
     verifyTargetPreconditions(locked.grant);
     const record = locked.authorization;
-    state.integrationIntents.push(intent); state.humanHold = true; record.lifecycle.status = "INTEGRATING"; record.lifecycle.integrationIntentId = intentId; record.lifecycle.transitionHistory.push({ from: "CLAIMED", to: "INTEGRATING", at: now, reason: "DURABLE_INTEGRATION_INTENT" }); state.stateVersion += 1; return { state };
+    state.integrationIntents.push(intent); record.lifecycle.status = "INTEGRATING"; record.lifecycle.integrationIntentId = intentId; record.lifecycle.transitionHistory.push({ from: "CLAIMED", to: "INTEGRATING", at: now, reason: "DURABLE_REF_ONLY_INTEGRATION_INTENT" }); state.stateVersion += 1; return { state };
   }});
   if (inject === "after-intent") { reconcile({ statePath, ownerId: initial.owner.id, ownerGeneration: initial.owner.generation, intentId, cycleId, targetRoot, branch: grant.targetBranch, now }); throw Object.assign(new Error("INTEGRATION_RECONCILIATION_REQUIRED"), { code: "INTEGRATION_RECONCILIATION_REQUIRED" }); }
   const gitDir = path.resolve(targetRoot, git(targetRoot, ["rev-parse", "--git-dir"]).stdout.trim());
@@ -118,24 +156,45 @@ export function integrateRealCandidate({ statePath, cycleId, controllerRoot = pr
     git(targetRoot, ["fetch", "--no-write-fetch-head", "--no-tags", workspaceRoot, cycle.candidateCommit], { write: true });
     const descendant = git(targetRoot, ["merge-base", "--is-ancestor", grant.baselineCommit, cycle.candidateCommit], { allowFailure: true }); if (descendant.status !== 0) throw new Error("CANDIDATE_NOT_DESCENDANT");
     const imported = changedFiles(targetRoot, grant.baselineCommit, cycle.candidateCommit); if (imported.length !== 1 || imported[0].path !== grant.allowedChanges[0].path || imported[0].status !== "A") throw new Error("INTEGRATION_SCOPE_MISMATCH");
-    git(targetRoot, ["update-ref", `refs/heads/${grant.targetBranch}`, cycle.candidateCommit, grant.baselineCommit], { write: true });
+    if (testBeforeRefRecheck !== null) {
+      if (authority.authorityClass !== "DISPOSABLE_TEST" || typeof testBeforeRefRecheck !== "function") throw new Error("TEST_HOOK_FORBIDDEN");
+      testBeforeRefRecheck({ targetRoot });
+    }
+    const stateLock = acquireLock(`${statePath}.lock`, { controllerId: initial.owner.id, generation: initial.owner.generation, operation: "ref-only-integration", pid: process.pid });
+    if (!stateLock.acquired) throw new Error("STATE_LOCKED");
+    try {
+      const authoritative = readState(statePath); validateAuthorityState(authoritative, statePath);
+      assertTrustedAuthoritySource({ statePath, targetRoot, stored: authoritative.authorityStore });
+      if (authoritative.humanHold) throw new Error("HUMAN_HOLD_ACTIVE");
+      const lockedCycle = authoritative.cycles.find((item) => item.id === cycleId); const lockedAuthorization = authoritative.authorizations.find((item) => item.grant.authorizationId === grant.authorizationId); const lockedIntent = authoritative.integrationIntents.find((item) => item.intentId === intentId);
+      if (!lockedCycle || !lockedAuthorization || !lockedIntent || lockedAuthorization.lifecycle.status !== "INTEGRATING" || lockedAuthorization.lifecycle.integrationIntentId !== intentId || lockedIntent.status !== "PREPARED") throw new Error("INTEGRATION_ELIGIBILITY_CHANGED");
+      if (sha256Canonical(lockedIntent) !== sha256Canonical(intent) || lockedAuthorization.grant.authorizationDigest !== grant.authorizationDigest) throw new Error("INTEGRATION_ELIGIBILITY_CHANGED");
+      if (lockedCycle.status !== "REVIEW" || lockedCycle.stage !== "AWAITING_INTEGRATION" || lockedCycle.integrationStatus !== "NOT_STARTED" || lockedCycle.candidateCommit !== cycle.candidateCommit || lockedCycle.analystResultDigest !== cycle.analystResultDigest || lockedCycle.architectResultDigest !== cycle.architectResultDigest) throw new Error("INTEGRATION_ELIGIBILITY_CHANGED");
+      requireApprovalEvidence(authoritative, lockedCycle);
+      verifyBoundControllerIdentity(lockedAuthorization.grant.controller, controllerRoot);
+      verifyTargetPreconditions(lockedAuthorization.grant);
+      git(targetRoot, ["update-ref", `refs/heads/${grant.targetBranch}`, cycle.candidateCommit, grant.baselineCommit], { write: true });
+    } finally { stateLock.release(); }
     if (inject === "after-ref") throw new Error("INJECTED_AFTER_REF_MUTATION");
-    git(targetRoot, ["read-tree", "--reset", "-u", cycle.candidateCommit], { write: true });
-    if (inject === "after-worktree") throw new Error("INJECTED_AFTER_WORKTREE_MUTATION");
-    const after = captureTargetSnapshot(targetRoot); assertPreexistingPreserved(before, after, grant.allowedChanges[0].path);
-    if (resolveCommit(targetRoot) !== cycle.candidateCommit || resolveCommit(targetRoot, "refs/heads/main") !== grant.targetSnapshot.protectedRefs.main || resolveCommit(targetRoot, "refs/remotes/origin/main") !== grant.targetSnapshot.protectedRefs.originMain || resolveCommit(targetRoot, `refs/remotes/origin/${grant.targetBranch}`) !== grant.targetSnapshot.protectedRefs.originSelfImprovement || statusPorcelain(targetRoot) !== "") throw new Error("INTEGRATION_POSTCONDITION_FAILED");
-    if (commitMetadata(targetRoot, cycle.candidateCommit).tree !== intent.candidateTree) throw new Error("INTEGRATED_COMMIT_IDENTITY_CHANGED");
+    const after = captureTargetSnapshot(targetRoot); assertRefOnlyCheckoutPreserved({ before, after, grant, candidate, intent });
     if (inject === "before-receipt") throw new Error("INJECTED_BEFORE_FINAL_RECEIPT");
-    mutateStateV2({ statePath, ownerId: initial.owner.id, ownerGeneration: initial.owner.generation, mutator(state) {
+    const recorded = mutateStateV2({ statePath, ownerId: initial.owner.id, ownerGeneration: initial.owner.generation, mutator(state) {
+      validateAuthorityState(state, statePath);
       assertTrustedAuthoritySource({ statePath, targetRoot, stored: state.authorityStore });
-      const storedIntent = state.integrationIntents.find((item) => item.intentId === intentId); storedIntent.status = "APPLIED";
-      const record = state.authorizations.find((item) => item.grant.authorizationId === grant.authorizationId); record.lifecycle.status = "CONSUMED"; record.lifecycle.integratedCommit = cycle.candidateCommit; record.lifecycle.transitionHistory.push({ from: "INTEGRATING", to: "CONSUMED", at: now, reason: "VERIFIED_IDENTITY_PRESERVING_INTEGRATION" });
-      state.integrationOutcomes.push({ intentId, cycleId, status: "INTEGRATED", oldTip: grant.baselineCommit, newTip: cycle.candidateCommit, verifiedAt: now });
-      const current = state.cycles.find((item) => item.id === cycleId); current.integrationStatus = "INTEGRATED";
-      const summary = finalizeTerminalCycle(state, current, { status: "ACCEPTED", stage: "COMPLETE", terminalReason: "INTEGRATED", now, humanHold: false, integration: { status: "INTEGRATED", oldTip: grant.baselineCommit, newTip: cycle.candidateCommit, scopeDigest: candidate.scopeDigest } });
-      state.stateVersion += 1; return { state, value: summary };
+      if (state.humanHold) throw new Error("HUMAN_HOLD_ACTIVE");
+      const storedIntent = state.integrationIntents.find((item) => item.intentId === intentId); const record = state.authorizations.find((item) => item.grant.authorizationId === grant.authorizationId);
+      if (!storedIntent || storedIntent.status !== "PREPARED" || !record || record.lifecycle.status !== "INTEGRATING" || record.lifecycle.integrationIntentId !== intentId) throw new Error("INTEGRATION_ELIGIBILITY_CHANGED");
+      if (sha256Canonical(storedIntent) !== sha256Canonical(intent) || record.grant.authorizationDigest !== grant.authorizationDigest) throw new Error("INTEGRATION_ELIGIBILITY_CHANGED");
+      const current = state.cycles.find((item) => item.id === cycleId); const currentApproval = requireApprovalEvidence(state, current); if (current.candidateCommit !== cycle.candidateCommit || currentApproval.review.resultDigest !== approved.review.resultDigest || current.architectResultDigest !== cycle.architectResultDigest) throw new Error("INTEGRATION_ELIGIBILITY_CHANGED");
+      const checkoutCondition = assertRefOnlyCheckoutPreserved({ before, after: captureTargetSnapshot(targetRoot), grant, candidate, intent });
+      storedIntent.status = "APPLIED";
+      record.lifecycle.status = "CONSUMED"; record.lifecycle.integratedCommit = cycle.candidateCommit; record.lifecycle.transitionHistory.push({ from: "INTEGRATING", to: "CONSUMED", at: now, reason: "VERIFIED_REF_ONLY_INTEGRATION_WITH_PRESERVED_CHECKOUT" });
+      state.integrationOutcomes.push({ intentId, cycleId, status: "INTEGRATED", oldTip: grant.baselineCommit, newTip: cycle.candidateCommit, checkoutCondition, verifiedAt: now });
+      current.integrationStatus = "INTEGRATED";
+      const summary = finalizeTerminalCycle(state, current, { status: "ACCEPTED", stage: "COMPLETE", terminalReason: "INTEGRATED", now, humanHold: false, integration: { status: "INTEGRATED", oldTip: grant.baselineCommit, newTip: cycle.candidateCommit, scopeDigest: candidate.scopeDigest }, checkoutCondition });
+      state.stateVersion += 1; return { state, value: { summary, checkoutCondition } };
     }});
-    return { status: "INTEGRATED", authorizationId: grant.authorizationId, candidateCommit: cycle.candidateCommit, intentId };
+    return { status: "INTEGRATED", authorizationId: grant.authorizationId, candidateCommit: cycle.candidateCommit, intentId, checkoutCondition: recorded.value.checkoutCondition };
   } catch (error) {
     reconcile({ statePath, ownerId: initial.owner.id, ownerGeneration: initial.owner.generation, intentId, cycleId, targetRoot, branch: grant.targetBranch, now });
     const uncertain = new Error("INTEGRATION_RECONCILIATION_REQUIRED", { cause: error }); uncertain.code = "INTEGRATION_RECONCILIATION_REQUIRED"; throw uncertain;

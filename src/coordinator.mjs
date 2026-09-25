@@ -118,7 +118,7 @@ export function newestSummary(statePath) {
 export function findCycle(state, cycleId) { const cycle = state.cycles.find((item) => item.id === cycleId); if (!cycle) throw new Error("CYCLE_NOT_FOUND"); return cycle; }
 export function summaryDigest(summary) { return sha256Canonical(Object.fromEntries(Object.entries(summary).filter(([key]) => key !== "digest"))); }
 
-export function finalizeTerminalCycle(state, cycle, { status, stage, terminalReason, now, integration = null, humanHold = true }) {
+export function finalizeTerminalCycle(state, cycle, { status, stage, terminalReason, now, integration = null, checkoutCondition = null, humanHold = true }) {
   const id = `summary:${cycle.id}:final`; const existing = state.summaries.find((item) => item.id === id); if (existing) return existing;
   cycle.status = status; cycle.stage = stage; state.activeCycleId = null; state.pendingTaskId = null; state.humanHold = humanHold;
   const authority = state.schemaVersion === 3 ? state.authorizations.find((item) => item.lifecycle.claimedCycleId === cycle.id) ?? null : null;
@@ -150,9 +150,10 @@ export function finalizeTerminalCycle(state, cycle, { status, stage, terminalRea
     unsigned.architectDecisions = state.results.filter((item) => item.cycleId === cycle.id && ["ARCHITECT_PLAN", "ARCHITECT_REVISION", "ARCHITECT_FINAL_DECISION"].includes(item.purpose)).map((item) => ({ purpose: item.purpose, resultDigest: item.resultDigest, decision: item.result.payload?.decision ?? null }));
     unsigned.integrationIntent = structuredClone(state.integrationIntents.find((item) => item.cycleId === cycle.id) ?? null);
     unsigned.changedPath = authority.grant.allowedChanges[0].path;
-    unsigned.protectedTargetComparison = { status: terminalReason === "INTEGRATED" ? "PREEXISTING_FILES_AND_REFS_VERIFIED" : "NO_TARGET_MUTATION", expectedBaseline: authority.grant.baselineCommit, resultingTip: integration?.newTip ?? authority.grant.baselineCommit };
+    unsigned.protectedTargetComparison = { status: terminalReason === "INTEGRATED" ? "REF_ADVANCED_CHECKOUT_PRESERVED" : "NO_TARGET_MUTATION", expectedBaseline: authority.grant.baselineCommit, resultingTip: integration?.newTip ?? authority.grant.baselineCommit };
+    unsigned.checkoutCondition = checkoutCondition === null ? null : structuredClone(checkoutCondition);
     unsigned.productionImpact = terminalReason === "INTEGRATED" ? "LOCAL_SELF_IMPROVEMENT_BRANCH_ONLY" : "NONE";
-    unsigned.limitations = ["No target remote push", "Notification delivery remains simulated", "Human-attested validation is not independently executed by the controller"];
+    unsigned.limitations = ["No target remote push", "Notification delivery remains simulated", "Human-attested validation is not independently executed by the controller", ...(terminalReason === "INTEGRATED" ? ["Protected checkout remains at the pre-integration baseline and is intentionally unsynchronized with the advanced branch ref", "Later checkout synchronization requires a separate human-controlled action", "No destructive checkout operation was performed"] : [])];
   }
   const summary = { ...unsigned, digest: summaryDigest(unsigned) }; state.summaries.push(summary);
   state.outbox.push({ id: `${state.repositoryId}:${cycle.id}:final`, status: "SIMULATED_ACCEPTED", payload: { summaryId: summary.id, summaryDigest: summary.digest, simulated: true } });

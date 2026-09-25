@@ -1,14 +1,14 @@
-# GOV-002 Real-Pilot Activation Gate Revision 2 — Builder Handoff
+# GOV-002 Real-Pilot Activation Gate Revision 3 — Builder Handoff
 
 ## Scope and baseline
 
-- Accepted parent: `216e43a4d1305221eb42eb10fee40e8dc5c8cc99`.
+- Accepted parent: `9b86fcdb4168e81b69cbc139c9489e1a347d2411`.
 - Controller branch: `main`, tracking the sole approved `origin/main`.
 - Protected target: no content, mode, ref, configuration, staged state, or worktree mutation. A prior read inspection refreshed raw index stat-cache bytes; the Architect classified raw index SHA-256 as diagnostic rather than normative and prohibited repair/reset.
 - Authority-state schema version: `3`; immutable grant schema version: `2`; existing fixture schema versions remain supported. Raw-index-only grant evidence is rejected as incompatible.
 - New authority capability: inactive without a validated protected-store grant and exact admission evidence.
 
-Revision 2 closes the two independent-review findings without reopening accepted behavior: authority provenance is now derived from controller-owned canonical policy at each consumption boundary, and integration eligibility is checked before intent and rechecked under the authoritative state lock. It keeps providers, publication, scheduling, paid fallback, email, automatic role launch, target push, and real authority provisioning unavailable.
+Revision 3 removes destructive checkout reconstruction from the real integration path without reopening the accepted authority, hold, semantic-index, replay, or reconciliation protections. It keeps providers, publication, scheduling, paid fallback, email, automatic role launch, target push, and real authority provisioning unavailable.
 
 ## Human authorization and ledger
 
@@ -16,7 +16,9 @@ Revision 2 closes the two independent-review findings without reopening accepted
 
 `show-authorization`, admission, integration, replay, and reconciliation independently bind the actual state path to controller-owned policy before trusting ledger assertions. The only production root is `/Users/yuriy/Library/Application Support/AI Agent Radar Orchestrator/authority/`; disposable authority is explicitly test-scoped below the OS temporary root and cannot authorize the protected real target. Admission persists the claim, one cycle, one task, and one receipt atomically.
 
-`integrate-local` accepts no target, branch, candidate, commit, or time override. It rejects holds, reconciliation, wrong cycle/stage, and stale candidate/review/Architect/validation evidence before intent, then repeats those checks with authority and target identity under the state lock immediately before `INTEGRATING`. Integration persists intent before target mutation, uses expected-old ref protection, preserves candidate identity, records one outcome, and consumes permission only after verified completion. Uncertain post-intent outcomes enter reconciliation and cannot retry automatically.
+`integrate-local` accepts no target, branch, candidate, commit, or time override. It rejects holds, reconciliation, wrong cycle/stage, and stale candidate/review/Architect/validation evidence before intent. Its version-4 durable intent records the pre-integration checkout baseline. After importing candidate objects, it holds the target and state locks together and repeats the exact authority, workflow, evidence, controller, repository, ref, semantic-index, manifest, modes, config, status, and pilot-path checks immediately before the one expected-old ref update.
+
+The real mutation is ref-only: `refs/heads/self-improvement` advances to the exact reviewed candidate. There is no `read-tree --reset -u`, reset, checkout, restore, clean, index replacement, or worktree reconstruction. Success records `REF_ADVANCED_CHECKOUT_PRESERVED`: symbolic `HEAD` and the branch resolve to the candidate while the semantic index and worktree remain byte/semantically equal to their pre-integration baseline. The resulting checkout is intentionally unsynchronized and reports the authorized new file as staged deleted relative to the advanced `HEAD`. A separate human-controlled action is required for any later synchronization.
 
 ## Boundary and evidence
 
@@ -36,12 +38,13 @@ No other existing test was changed merely for compatibility. No dependency, work
 
 ## Verification record
 
-- Final complete offline suite: 138 tests passed, 0 failed, through `/bin/sh scripts/test-offline.sh` under native network denial after a successful combined filesystem/network confinement probe. This is the exact top-level count emitted by the Node test runner; it emitted no separate nested aggregate count.
+- Final complete offline suite: 142 tests passed, 0 failed, through `/bin/sh scripts/test-offline.sh` under native network denial after a successful combined filesystem/network confinement probe. This is the exact top-level count emitted by the Node test runner; it emitted no separate nested aggregate count.
 - Public CLI: interactive digest confirmation through final local integration exercised solely against disposable repositories and authority storage.
 - Authority provenance: fabricated payload, copied/rebound internally consistent ledger, direct public `integrate-local`, and disposable-store/real-target attempts are rejected before real-cycle creation or integration intent.
-- Locked eligibility: initial human hold, a hold introduced between checks, unresolved checkpoint reconciliation, and stale cycle/candidate/Analyst/Architect/validation state are rejected without target mutation.
+- Locked eligibility: initial human hold, a hold introduced between checks, unresolved checkpoint reconciliation, stale cycle/candidate/Analyst/Architect/validation state, and late worktree/index/mode/config drift are rejected before ref mutation without checkout rewrite.
 - Semantic preservation: stat-cache-only raw index changes pass when semantics remain stable; staged add/modify/delete/mode/path/blob changes, unmerged stages, intent-to-add, assume-unchanged, and skip-worktree fail. Spaces, tabs, and newlines in fixture paths are covered with NUL-safe serialization.
-- Uncertainty: before-intent safe failure and after-intent/ref/worktree/before-receipt reconciliation cases exercised with no retry.
+- Ref-only result: only the protected branch ref advances; candidate identity is exact; semantic index, worktree manifest, and modes remain at the pre-integration baseline; the precise unsynchronized porcelain status is recorded and never described as clean.
+- Uncertainty: before-intent safe failure and after-intent/ref/before-receipt reconciliation cases exercised with no rollback or retry.
 - Summary behavior: each Analyst review retains one iteration summary; terminal activation outcomes retain one `HUMAN_ASSISTED` final summary; notification delivery remains simulated.
 - Candidate/target: exact candidate commit is preserved; production and remote-tracking refs and all pre-existing files/modes remain unchanged.
 

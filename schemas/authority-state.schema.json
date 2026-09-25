@@ -31,7 +31,7 @@
     "timings": { "type": "array" },
     "checkpointIntents": { "type": "array" },
     "checkpointReceipts": { "type": "array" },
-    "integrationIntents": { "type": "array", "items": { "allOf": [{ "$ref": "integration-intent.schema.json" }, { "properties": { "schemaVersion": { "const": 3 } } }] } },
+    "integrationIntents": { "type": "array", "items": { "allOf": [{ "$ref": "integration-intent.schema.json" }, { "properties": { "schemaVersion": { "enum": [3, 4] } } }] } },
     "integrationOutcomes": { "type": "array" },
     "migration": { "type": ["object", "null"] },
     "authorityStore": { "$ref": "#/$defs/authorityStore" },

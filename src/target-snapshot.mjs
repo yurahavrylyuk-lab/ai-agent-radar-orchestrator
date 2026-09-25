@@ -103,6 +103,7 @@ export function captureTargetSnapshot(root) {
     branch: git(canonicalRoot, ["branch", "--show-current"]).stdout.trim(),
     refs,
     statusDigest: hash(statusBytes),
+    statusPorcelainV1Base64: statusBytes.toString("base64"),
     manifest, manifestBytes, manifestDigest: hash(manifestBytes),
     modes, modesBytes, modesDigest: hash(modesBytes),
     configDigest: hash(fs.readFileSync(config)), rawIndexDigestDiagnostic: hash(fs.readFileSync(index)),

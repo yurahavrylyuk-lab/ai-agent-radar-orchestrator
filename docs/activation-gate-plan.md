@@ -1,4 +1,4 @@
-# GOV-002 Real-Pilot Activation Gate Revision 2
+# GOV-002 Real-Pilot Activation Gate Revision 3
 
 ## Purpose
 
@@ -35,7 +35,11 @@ Real admission rechecks controller cleanliness, policy-derived authority provena
 
 ## Local integration and uncertainty
 
-`integrate-local` derives all mutation identities from protected state. Before intent it rejects a human hold, unresolved checkpoint or integration reconciliation, wrong active cycle, wrong status/stage, stale candidate, stale Analyst review, stale Architect acceptance, and stale successful validation evidence. It then repeats the same authority, workflow, evidence, and target checks under the authoritative state lock immediately before persisting intent and changing lifecycle to `INTEGRATING`. A change between checks is refused without an intent or target mutation. Only then may it import local objects and apply an expected-old ref update while preserving the exact candidate commit.
+`integrate-local` derives all mutation identities from protected state. Before intent it rejects a human hold, unresolved checkpoint or integration reconciliation, wrong active cycle, wrong status/stage, stale candidate, stale Analyst review, stale Architect acceptance, and stale successful validation evidence. It persists a version-4 intent containing the exact pre-integration checkout baseline, then imports only the reviewed local objects. Immediately before ref mutation, while holding both the exclusive target lock and authoritative state lock, it revalidates the exact intent, grant, cycle, review evidence, controller identity, target identity, protected refs, semantic index, manifest, modes, configuration, clean status, and pilot-path absence.
+
+Real integration is ref-only. The sole authorized ref mutation is an expected-old update of `refs/heads/self-improvement` from the approved baseline to the exact reviewed candidate. The operation does not run `read-tree --reset -u`, reset, checkout, restore, clean, index replacement, or any equivalent worktree reconstruction. It verifies the one-file ADD from commit/tree evidence rather than by synchronizing the checkout.
+
+A successful outcome records the versioned condition `REF_ADVANCED_CHECKOUT_PRESERVED`. Symbolic `HEAD` remains `refs/heads/self-improvement`, that branch ref and `HEAD` resolve to the candidate, while the semantic index, worktree manifest, modes, configuration, and repository identity remain equal to the pre-integration baseline. The index intentionally does not equal the new `HEAD`; for the authorized ADD, porcelain status is exactly a staged deletion of `docs/learning/offline-fixture-reading.md` because the file remains absent from the preserved checkout. This is not a clean or synchronized checkout. Any later synchronization is a separate human-controlled action and is not implemented here.
 
 A confirmed completed replay returns the stored result. Any uncertainty after durable intent creates a reconciliation hold; there is no automatic rollback, retry, replacement authorization, or replacement cycle. Negative terminal role outcomes close the claimed authorization and produce one immutable `HUMAN_ASSISTED` final summary. All notification records remain simulated.
 
@@ -45,8 +49,8 @@ A confirmed completed replay returns the stored result. Any uncertainty after du
 - Run the complete test inventory only through `/bin/sh scripts/test-offline.sh`.
 - Prove denied inbound/outbound network operations and direct/descendant filesystem operations under native sandbox enforcement.
 - Run the full public CLI lifecycle without internal imports or manual state editing.
-- Exercise forged, altered, copied, rebound, changed, replayed, concurrent, held, stale-evidence, invalid-target, and uncertainty paths.
-- Prove exact candidate identity and protected ref/file preservation.
+- Exercise forged, altered, copied, rebound, changed, replayed, concurrent, held, stale-evidence, late-worktree/index/mode/config drift, invalid-target, and post-ref uncertainty paths.
+- Prove exact candidate identity, ref-only advancement, unchanged pre-integration index/worktree evidence, and the precise intentionally unsynchronized status.
 - Compare the protected AI Agent Radar target’s pre/post Node SHA-256 manifest, modes, refs, config, semantic index, status, and pilot-path absence. Raw index hashes are diagnostic only.
 
 The target manifest method is deterministic and dependency-free: enumerate non-ignored tracked/untracked paths with `git -c core.optionalLocks=false ls-files -co --exclude-standard -z`; deduplicate and sort lexically; require regular files; hash bytes with Node `crypto` SHA-256; serialize as `JSON.stringify(records, null, 2) + "\n"`. Evidence remains in a Builder-owned temporary directory outside both repositories.
