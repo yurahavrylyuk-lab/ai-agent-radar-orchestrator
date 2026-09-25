@@ -5,6 +5,8 @@ import { spawnSync } from "node:child_process";
 import { sha256Canonical } from "./contracts.mjs";
 
 export const PRODUCTION_AUTHORITY_ROOT = "/Users/yuriy/Library/Application Support/AI Agent Radar Orchestrator/authority";
+export const PROTECTED_REAL_TARGET_ROOT = "/Users/yuriy/Documents/IT Study/General/General/AI Agents/The AI Monitoring Agent";
+export const DISPOSABLE_AUTHORITY_TEST_FLAG = "GOV002_TEST_DISPOSABLE_AUTHORITY";
 
 function canonicalParent(filePath) {
   const parent = fs.realpathSync(path.dirname(path.resolve(filePath)));
@@ -83,4 +85,31 @@ export function assertAuthorityStoreBinding(statePath, stored) {
   const current = authorityStoreIdentity(statePath);
   if (stored.canonicalStatePath !== current.canonicalStatePath || stored.authorityStoreId !== current.authorityStoreId) throw new Error("AUTHORITY_STORE_BINDING_MISMATCH");
   return current;
+}
+
+function isInside(parent, child) {
+  const relative = path.relative(parent, child);
+  return relative !== "" && !relative.startsWith(`..${path.sep}`) && relative !== ".." && !path.isAbsolute(relative);
+}
+
+export function assertTrustedAuthoritySource({ statePath, targetRoot, stored = null }) {
+  const canonicalTargetRoot = fs.realpathSync(targetRoot);
+  let current;
+  let authorityClass;
+  if (canonicalTargetRoot === fs.realpathSync(PROTECTED_REAL_TARGET_ROOT)) {
+    current = assertProductionAuthorityLocation(statePath);
+    authorityClass = "PRODUCTION";
+  } else {
+    if (process.env[DISPOSABLE_AUTHORITY_TEST_FLAG] !== "1") throw new Error("DISPOSABLE_AUTHORITY_TEST_SCOPE_REQUIRED");
+    current = authorityStoreIdentity(statePath);
+    const temporaryRoot = fs.realpathSync(os.tmpdir());
+    if (!isInside(temporaryRoot, canonicalTargetRoot) || !isInside(temporaryRoot, current.canonicalRoot)) throw new Error("DISPOSABLE_AUTHORITY_OUTSIDE_TEST_ROOT");
+    authorityClass = "DISPOSABLE_TEST";
+  }
+  if (stored !== null) {
+    if (stored.canonicalStatePath !== current.canonicalStatePath || stored.canonicalRoot !== current.canonicalRoot || stored.authorityStoreId !== current.authorityStoreId) throw new Error("AUTHORITY_STORE_BINDING_MISMATCH");
+    const expectedMechanism = authorityClass === "PRODUCTION" ? "MACOS_SANDBOX_EXEC" : "DISPOSABLE_TARGET_BOUNDARY";
+    if (stored.boundary?.mechanism !== expectedMechanism) throw new Error("AUTHORITY_BOUNDARY_MECHANISM_MISMATCH");
+  }
+  return Object.freeze({ ...current, authorityClass, canonicalTargetRoot });
 }

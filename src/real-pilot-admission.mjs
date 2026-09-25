@@ -4,14 +4,15 @@ import { buildTask } from "./coordinator.mjs";
 import { verifyBoundControllerIdentity } from "./controller-identity.mjs";
 import { git, resolveCommit, statusPorcelain } from "./git-evidence.mjs";
 import { mutateStateV2, readState } from "./local-store.mjs";
-import { assertAuthorityStoreBinding } from "./operator-boundary.mjs";
-import { captureTargetSnapshot } from "./target-snapshot.mjs";
+import { assertTrustedAuthoritySource } from "./operator-boundary.mjs";
+import { assertSemanticIndexInvariant, captureTargetSnapshot } from "./target-snapshot.mjs";
 import { sha256Canonical } from "./contracts.mjs";
 import { validateAuthorityState, validatePilotRequest } from "./validate.mjs";
 
 function sameSnapshot(grant, snapshot) {
   const expected = grant.targetSnapshot;
-  return expected.manifestDigest === snapshot.manifestDigest && expected.modesDigest === snapshot.modesDigest && expected.configDigest === snapshot.configDigest && expected.indexDigest === snapshot.indexDigest && expected.fileCount === snapshot.manifest.length;
+  assertSemanticIndexInvariant(snapshot);
+  return expected.manifestDigest === snapshot.manifestDigest && expected.modesDigest === snapshot.modesDigest && expected.configDigest === snapshot.configDigest && expected.semanticIndex.format === snapshot.semanticIndex.format && expected.semanticIndex.digest === snapshot.semanticIndex.digest && expected.semanticIndex.entryCount === snapshot.semanticIndex.entryCount && snapshot.semanticIndex.equalsHeadTree && snapshot.semanticIndex.ordinaryFlagsOnly && snapshot.semanticIndex.cachedDiffEmpty && expected.fileCount === snapshot.manifest.length;
 }
 
 function assertSafePilotAncestors(root, relative) {
@@ -45,9 +46,10 @@ function verifyTarget(grant) {
 
 export function admitRealPilotRequest({ statePath, request, controllerRoot = process.cwd(), now = new Date().toISOString() }) {
   validatePilotRequest(request);
+  assertTrustedAuthoritySource({ statePath, targetRoot: request.targetRoot });
   const initial = readState(statePath);
   validateAuthorityState(initial, statePath);
-  assertAuthorityStoreBinding(statePath, initial.authorityStore);
+  assertTrustedAuthoritySource({ statePath, targetRoot: request.targetRoot, stored: initial.authorityStore });
   const authorization = initial.authorizations.find((item) => item.grant.requestId === request.requestId);
   if (!authorization) throw new Error("MATCHING_AUTHORIZATION_REQUIRED");
   const { grant, lifecycle } = authorization;
@@ -62,6 +64,7 @@ export function admitRealPilotRequest({ statePath, request, controllerRoot = pro
   if (initial.humanHold || initial.activeCycleId !== null || initial.checkpointIntents.some((item) => item.status !== "COMPLETED") || initial.integrationIntents.some((item) => !["APPLIED", "CLOSED"].includes(item.status))) throw new Error("CONTROLLER_NOT_AVAILABLE");
   return mutateStateV2({ statePath, ownerId: initial.owner.id, ownerGeneration: initial.owner.generation, mutator(state) {
     const record = state.authorizations.find((item) => item.grant.authorizationId === grant.authorizationId);
+    assertTrustedAuthoritySource({ statePath, targetRoot: request.targetRoot, stored: state.authorityStore });
     if (record.lifecycle.status !== "ISSUED") throw new Error("AUTHORIZATION_ALREADY_USED");
     const cycle = { id: grant.cycleId, requestId: request.requestId, status: "AWAITING_HUMAN_ROLE", stage: "ARCHITECT_PLAN", targetRoot: grant.canonicalTargetRoot, targetBranch: grant.targetBranch, baselineCommit: grant.baselineCommit, expectedTargetTip: grant.baselineCommit, iterationBaseCommit: grant.baselineCommit, iteration: 1, planRevision: 1, candidateCommit: null, analystResultDigest: null, architectDecision: null, integrationStatus: "NOT_STARTED", createdAt: now };
     const task = buildTask(state, cycle, "ARCHITECT_PLAN", now);

@@ -10,9 +10,10 @@ const node = "/usr/local/bin/node";
 const git = "/usr/bin/git";
 const approvedOrigin = "https://github.com/yurahavrylyuk-lab/ai-agent-radar-orchestrator.git";
 const pilotPath = "docs/learning/offline-fixture-reading.md";
+const disposableEnv = { GOV002_TEST_DISPOSABLE_AUTHORITY: "1", GEMINI_API_KEY: "must-not-be-used", BRAVE_SEARCH_API_KEY: "must-not-be-used", RESEND_API_KEY: "must-not-be-used" };
 
 function run(program, args, cwd) {
-  const result = spawnSync(program, args, { cwd, encoding: "utf8", env: { ...process.env, GEMINI_API_KEY: "must-not-be-used", BRAVE_SEARCH_API_KEY: "must-not-be-used", RESEND_API_KEY: "must-not-be-used" } });
+  const result = spawnSync(program, args, { cwd, encoding: "utf8", env: { ...process.env, ...disposableEnv } });
   assert.equal(result.status, 0, `${program} ${args.join(" ")}\n${result.stderr}`); return result.stdout;
 }
 function writeJson(root, name, value) { const file = path.join(root, name); fs.writeFileSync(file, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 }); return file; }
@@ -20,7 +21,7 @@ function commit(root, message) { run(git, ["add", "-A"], root); run(git, ["-c", 
 
 async function authorize({ cwd, statePath, requestFile, approvalFile }) {
   return await new Promise((resolve, reject) => {
-    const child = spawn(node, [cli, "authorize-pilot", "--state", statePath, "--file", requestFile, "--approval-file", approvalFile], { cwd, stdio: ["pipe", "pipe", "pipe"], env: { ...process.env, GEMINI_API_KEY: "must-not-be-used", BRAVE_SEARCH_API_KEY: "must-not-be-used", RESEND_API_KEY: "must-not-be-used" } });
+    const child = spawn(node, [cli, "authorize-pilot", "--state", statePath, "--file", requestFile, "--approval-file", approvalFile], { cwd, stdio: ["pipe", "pipe", "pipe"], env: { ...process.env, ...disposableEnv } });
     let stdout = ""; let stderr = ""; let confirmed = false;
     child.stdout.on("data", (chunk) => { stdout += chunk; });
     child.stderr.on("data", (chunk) => {

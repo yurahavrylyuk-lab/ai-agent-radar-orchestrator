@@ -6,18 +6,25 @@ import { PHASE2, sha256Canonical } from "./contracts.mjs";
 const GIT = "/usr/bin/git";
 const SAFE_GIT_ENV = Object.freeze({
   GIT_OPTIONAL_LOCKS: "0",
+  GIT_NO_LAZY_FETCH: "1",
   GIT_CONFIG_NOSYSTEM: "1",
   GIT_CONFIG_GLOBAL: "/dev/null",
   GIT_TERMINAL_PROMPT: "0",
   GIT_ASKPASS: "/usr/bin/false",
   GIT_SSH_COMMAND: "/usr/bin/false",
   GIT_ALLOW_PROTOCOL: "file",
+  LC_ALL: "C",
 });
+
+function sanitizedEnvironment() {
+  const inherited = { ...process.env };
+  for (const key of Object.keys(inherited)) if (["GIT_DIR", "GIT_COMMON_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_CONFIG", "GIT_CONFIG_SYSTEM", "GIT_CONFIG_GLOBAL", "GIT_CONFIG_NOSYSTEM", "GIT_CONFIG_COUNT", "GIT_EXEC_PATH", "GIT_SSH", "GIT_PROXY_COMMAND"].includes(key) || /^GIT_CONFIG_(?:KEY|VALUE)_/u.test(key)) delete inherited[key];
+  return inherited;
+}
 
 export function git(root, args, { write = false, allowFailure = false, input = undefined, env = {} } = {}) {
   if (!Array.isArray(args) || args.some((arg) => typeof arg !== "string")) throw new TypeError("git arguments must be strings");
-  const inherited = { ...process.env };
-  for (const key of Object.keys(inherited)) if (["GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_CONFIG_COUNT", "GIT_EXEC_PATH", "GIT_SSH", "GIT_PROXY_COMMAND"].includes(key) || /^GIT_CONFIG_(?:KEY|VALUE)_/u.test(key)) delete inherited[key];
+  const inherited = sanitizedEnvironment();
   const result = spawnSync(GIT, ["-C", root, ...args], {
     encoding: "utf8",
     input,
@@ -28,6 +35,21 @@ export function git(root, args, { write = false, allowFailure = false, input = u
   if (result.status !== 0 && !allowFailure) {
     const error = new Error(`GIT_COMMAND_FAILED: git ${args[0]} (${result.status}): ${result.stderr.trim()}`);
     error.code = "GIT_COMMAND_FAILED"; error.status = result.status; throw error;
+  }
+  return { status: result.status, stdout: result.stdout, stderr: result.stderr };
+}
+
+export function inspectGit(root, args, { allowFailure = false } = {}) {
+  if (!Array.isArray(args) || args.some((arg) => typeof arg !== "string")) throw new TypeError("git arguments must be strings");
+  const result = spawnSync(GIT, ["--no-optional-locks", "-c", "core.fsmonitor=false", "-c", "core.untrackedCache=false", "-C", root, ...args], {
+    encoding: null,
+    env: { ...sanitizedEnvironment(), ...SAFE_GIT_ENV, GIT_OPTIONAL_LOCKS: "0", GIT_NO_LAZY_FETCH: "1", LC_ALL: "C" },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  if (result.error) throw result.error;
+  if (result.status !== 0 && !allowFailure) {
+    const error = new Error(`GIT_INSPECTION_FAILED: git ${args[0]} (${result.status}): ${result.stderr.toString("utf8").trim()}`);
+    error.code = "GIT_INSPECTION_FAILED"; error.status = result.status; throw error;
   }
   return { status: result.status, stdout: result.stdout, stderr: result.stderr };
 }

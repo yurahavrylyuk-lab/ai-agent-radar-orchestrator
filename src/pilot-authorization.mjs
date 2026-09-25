@@ -5,13 +5,13 @@ import { REAL_TARGET_ROOT } from "./coordinator.mjs";
 import { inspectControllerIdentity } from "./controller-identity.mjs";
 import { git, resolveCommit, statusPorcelain } from "./git-evidence.mjs";
 import { initializeStateV2, mutateStateV2, readState } from "./local-store.mjs";
-import { assertAuthorityStoreBinding, assertProductionAuthorityLocation, authorityStoreIdentity, roleSandboxProfile, verifyDisposableConfinement } from "./operator-boundary.mjs";
-import { captureTargetSnapshot } from "./target-snapshot.mjs";
+import { assertTrustedAuthoritySource, roleSandboxProfile, verifyDisposableConfinement } from "./operator-boundary.mjs";
+import { assertSemanticIndexInvariant, captureTargetSnapshot } from "./target-snapshot.mjs";
 import { validateAuthorityState, validatePilotAuthorizationGrant, validatePilotRequest } from "./validate.mjs";
 
 export const AUTHORITY_STATE_VERSION = 1;
 export const PILOT_REQUEST_SCHEMA_VERSION = 1;
-export const PILOT_AUTHORIZATION_SCHEMA_VERSION = 1;
+export const PILOT_AUTHORIZATION_SCHEMA_VERSION = 2;
 export const PILOT_BASELINE = "33a60a1f74960f9c171f5449627db1be362c6481";
 
 export const PILOT_RESTRICTIONS = Object.freeze({
@@ -81,9 +81,9 @@ export function preparePilotAuthorization({ statePath, request, humanApproval, c
   if (canonicalTargetRoot !== path.resolve(request.targetRoot)) throw new Error("TARGET_ROOT_NOT_CANONICAL");
   const realTarget = canonicalTargetRoot === fs.realpathSync(REAL_TARGET_ROOT);
   const existing = fs.existsSync(statePath) ? readState(statePath) : null;
-  if (existing !== null) { validateAuthorityState(existing, statePath); assertAuthorityStoreBinding(statePath, existing.authorityStore); }
-  const expectedStore = realTarget ? assertProductionAuthorityLocation(statePath) : authorityStoreIdentity(statePath);
-  if (existing !== null && existing.authorityStore.authorityStoreId !== expectedStore.authorityStoreId) throw new Error("AUTHORITY_STORE_BINDING_MISMATCH");
+  if (existing !== null) validateAuthorityState(existing, statePath);
+  const authority = assertTrustedAuthoritySource({ statePath, targetRoot: canonicalTargetRoot, stored: existing?.authorityStore ?? null });
+  const expectedStore = { canonicalStatePath: authority.canonicalStatePath, canonicalRoot: authority.canonicalRoot, authorityStoreId: authority.authorityStoreId };
   const store = existing?.authorityStore ?? expectedStore;
   if (store.canonicalRoot === canonicalTargetRoot || store.canonicalRoot === fs.realpathSync(controllerRoot)) throw new Error("AUTHORITY_STORE_NOT_SEPARATE");
   if (existing !== null && existing.repositoryId !== request.repositoryId) throw new Error("AUTHORITY_LEDGER_REPOSITORY_MISMATCH");
@@ -94,6 +94,7 @@ export function preparePilotAuthorization({ statePath, request, humanApproval, c
   if (git(canonicalTargetRoot, ["branch", "--show-current"]).stdout.trim() !== request.targetBranch) throw new Error("TARGET_BRANCH_MISMATCH");
   if (fs.existsSync(path.join(canonicalTargetRoot, PHASE2.pilotPath))) throw new Error("PILOT_PATH_ALREADY_EXISTS");
   const snapshot = captureTargetSnapshot(canonicalTargetRoot);
+  assertSemanticIndexInvariant(snapshot);
   const gitDirectoryPath = fs.realpathSync(path.resolve(canonicalTargetRoot, git(canonicalTargetRoot, ["rev-parse", "--git-dir"]).stdout.trim())); const gitDirectoryStat = fs.lstatSync(gitDirectoryPath);
   const protectedRefs = targetRefs(canonicalTargetRoot);
   if (protectedRefs.selfImprovement !== request.baselineCommit || protectedRefs.originSelfImprovement !== request.baselineCommit || protectedRefs.main === null || protectedRefs.originMain !== protectedRefs.main) throw new Error("TARGET_PROTECTED_REFS_MISMATCH");
@@ -123,7 +124,7 @@ export function preparePilotAuthorization({ statePath, request, humanApproval, c
     canonicalTargetRoot,
     targetBranch: request.targetBranch,
     baselineCommit: request.baselineCommit,
-    targetSnapshot: { manifestDigest: snapshot.manifestDigest, modesDigest: snapshot.modesDigest, configDigest: snapshot.configDigest, indexDigest: snapshot.indexDigest, fileCount: snapshot.manifest.length, gitDirectoryIdentity: { canonicalPath: gitDirectoryPath, device: gitDirectoryStat.dev, inode: gitDirectoryStat.ino }, protectedRefs },
+    targetSnapshot: { manifestDigest: snapshot.manifestDigest, modesDigest: snapshot.modesDigest, configDigest: snapshot.configDigest, rawIndexDigestDiagnostic: snapshot.rawIndexDigestDiagnostic, semanticIndex: structuredClone(snapshot.semanticIndex), fileCount: snapshot.manifest.length, gitDirectoryIdentity: { canonicalPath: gitDirectoryPath, device: gitDirectoryStat.dev, inode: gitDirectoryStat.ino }, protectedRefs },
     requestId: request.requestId,
     requestDigest,
     cycleId: `cycle:${request.requestId}`,
@@ -143,6 +144,7 @@ export function preparePilotAuthorization({ statePath, request, humanApproval, c
 export function commitPilotAuthorization({ statePath, proposal, confirmation }) {
   if (confirmation !== `CONFIRM ${proposal.grant.authorizationDigest}`) throw new Error("DIGEST_SPECIFIC_CONFIRMATION_REQUIRED");
   const grant = proposal.grant;
+  assertTrustedAuthoritySource({ statePath, targetRoot: grant.canonicalTargetRoot, stored: { ...proposal.store, boundary: proposal.boundary } });
   const state = {
     schemaVersion: 3,
     authorityStateVersion: AUTHORITY_STATE_VERSION,
@@ -160,7 +162,7 @@ export function commitPilotAuthorization({ statePath, proposal, confirmation }) 
     admissionReceipts: [],
   };
   if (fs.existsSync(statePath)) {
-    const existing = readState(statePath); validateAuthorityState(existing, statePath); assertAuthorityStoreBinding(statePath, existing.authorityStore);
+    const existing = readState(statePath); validateAuthorityState(existing, statePath); assertTrustedAuthoritySource({ statePath, targetRoot: grant.canonicalTargetRoot, stored: existing.authorityStore });
     if (existing.repositoryId !== grant.repositoryId || existing.authorizations.some((item) => item.grant.authorizationId === grant.authorizationId || item.grant.requestId === grant.requestId)) throw new Error("AUTHORIZATION_LEDGER_CONFLICT");
     mutateStateV2({ statePath, ownerId: existing.owner.id, ownerGeneration: existing.owner.generation, mutator(current) { current.authorizations.push({ grant: structuredClone(grant), lifecycle: initialLifecycle(grant, grant.issuedAt) }); current.stateVersion += 1; return { state: current }; } });
   } else {
@@ -173,9 +175,9 @@ export function commitPilotAuthorization({ statePath, proposal, confirmation }) 
 export function showPilotAuthorization(statePath, authorizationId) {
   const state = readState(statePath);
   validateAuthorityState(state, statePath);
-  assertAuthorityStoreBinding(statePath, state.authorityStore);
   const record = state.authorizations.find((item) => item.grant.authorizationId === authorizationId);
   if (!record) throw new Error("AUTHORIZATION_NOT_FOUND");
+  assertTrustedAuthoritySource({ statePath, targetRoot: record.grant.canonicalTargetRoot, stored: state.authorityStore });
   return structuredClone(record);
 }
 

@@ -24,6 +24,11 @@ test("activation authorization is digest-bound, human-confirmed, and stored in a
   assert.equal(showPilotAuthorization(fixture.statePath, proposal.grant.authorizationId).grant.authorizationDigest, proposal.grant.authorizationDigest);
 });
 
+test("legacy raw-index-only authorization evidence is rejected rather than converted", () => {
+  const fixture = activationFixture("authorization-legacy-index"); const proposal = preparePilotAuthorization({ statePath: fixture.statePath, request: fixture.request, humanApproval: fixture.approval, controllerRoot: fixture.controller.root, now: issuedAt }); const legacy = structuredClone(proposal.grant); legacy.schemaVersion = 1; legacy.targetSnapshot.indexDigest = legacy.targetSnapshot.rawIndexDigestDiagnostic; delete legacy.targetSnapshot.rawIndexDigestDiagnostic; delete legacy.targetSnapshot.semanticIndex;
+  assert.throws(() => validatePilotAuthorizationGrant(legacy), /schemaVersion must be 2/);
+});
+
 test("one bound authority ledger retains prior authorization history when a later grant is issued", () => {
   const fixture = activationFixture("authorization-ledger"); const first = issue(fixture); const secondRequest = { ...fixture.request, requestId: "authorization-ledger-second-request", createdAt: "2026-09-22T06:04:00.000Z" }; const secondApproval = { source: "HUMAN_OPERATOR", reference: "authorization-ledger-second-human", statement: expectedHumanApprovalStatement(secondRequest) };
   const second = preparePilotAuthorization({ statePath: fixture.statePath, request: secondRequest, humanApproval: secondApproval, controllerRoot: fixture.controller.root, now: "2026-09-22T06:05:00.000Z" }); commitPilotAuthorization({ statePath: fixture.statePath, proposal: second, confirmation: `CONFIRM ${second.grant.authorizationDigest}` });

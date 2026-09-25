@@ -5,6 +5,8 @@ import { APPROVED_CONTROLLER_ORIGIN } from "../../src/controller-remote-policy.m
 import { expectedHumanApprovalStatement } from "../../src/pilot-authorization.mjs";
 import { git, resolveCommit } from "../../src/git-evidence.mjs";
 
+process.env.GOV002_TEST_DISPOSABLE_AUTHORITY = "1";
+
 export function activationRuntime(prefix) {
   return fs.mkdtempSync(path.join(os.tmpdir(), `gov002-${prefix}-`));
 }
