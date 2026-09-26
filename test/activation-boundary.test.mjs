@@ -7,8 +7,13 @@ import { fileURLToPath } from "node:url";
 import {
   assertBoundaryRootIdentity,
   assertConfinementProbeResults,
+  assertRealConfinementEvidence,
   captureBoundaryRoot,
+  PRODUCTION_AUTHORITY_ROOT,
+  PRODUCTION_CONTROLLER_ROOT,
+  PROTECTED_REAL_TARGET_ROOT,
   roleSandboxProfile,
+  runRealConfinementDiagnostic,
 } from "../src/operator-boundary.mjs";
 
 function fixture() {
@@ -112,6 +117,64 @@ test("missing probe results and unexpected probe errors fail closed", () => {
   unexpected.direct[0].result = "UNEXPECTED_ERROR";
   unexpected.direct[0].errorCode = "EIO";
   assert.throws(() => assertConfinementProbeResults(unexpected), /CONFINEMENT_PROBE_FAILED:authority-read:UNEXPECTED_ERROR:EIO/u);
+});
+
+test("standalone real diagnostic is fixed to policy-owned production roots and has no authorization call path", () => {
+  assert.equal(PRODUCTION_AUTHORITY_ROOT, "/Users/yuriy/Library/Application Support/AI Agent Radar Orchestrator/authority");
+  assert.equal(PRODUCTION_CONTROLLER_ROOT, "/Users/yuriy/Documents/IT Study/General/General/AI Agents/ai-agent-radar-orchestrator");
+  assert.equal(PROTECTED_REAL_TARGET_ROOT, "/Users/yuriy/Documents/IT Study/General/General/AI Agents/The AI Monitoring Agent");
+  const source = runRealConfinementDiagnostic.toString();
+  assert.match(source, /PRODUCTION_AUTHORITY_ROOT/u);
+  assert.match(source, /PRODUCTION_CONTROLLER_ROOT/u);
+  assert.match(source, /PROTECTED_REAL_TARGET_ROOT/u);
+  assert.doesNotMatch(source, /authoriz|proposal|digest|ledger|grant|cycle|pilot|integrat/iu);
+});
+
+test("native permission evidence covers direct and descendant checks without mutation attempts", () => {
+  const evidence = JSON.parse(process.env.GOV002_NATIVE_BOUNDARY_EVIDENCE);
+  assert.equal(assertRealConfinementEvidence(evidence), true);
+  assert.equal(evidence.protectedPathMutationAttempts, 0);
+  assert.equal(evidence.records.filter((item) => item.context === "direct").length, 7);
+  assert.equal(evidence.records.filter((item) => item.context === "descendant").length, 7);
+});
+
+test("native query errors and missing direct or descendant evidence fail closed", () => {
+  const accepted = JSON.parse(process.env.GOV002_NATIVE_BOUNDARY_EVIDENCE);
+  const queryError = structuredClone(accepted);
+  queryError.records[0].nativeStatus = -1;
+  queryError.records[0].observedPermission = "QUERY_ERROR";
+  assert.throws(() => assertRealConfinementEvidence(queryError), /REAL_CONFINEMENT_PERMISSION_FAILED/u);
+  const missingDirect = structuredClone(accepted);
+  missingDirect.records.splice(missingDirect.records.findIndex((item) => item.context === "direct"), 1);
+  assert.throws(() => assertRealConfinementEvidence(missingDirect), /REAL_CONFINEMENT_RESULT_SET_INVALID/u);
+  const missingDescendant = structuredClone(accepted);
+  missingDescendant.records.splice(missingDescendant.records.findIndex((item) => item.context === "descendant"), 1);
+  assert.throws(() => assertRealConfinementEvidence(missingDescendant), /REAL_CONFINEMENT_RESULT_SET_INVALID/u);
+});
+
+test("allowed forbidden permissions, denied output, and identity drift fail closed", () => {
+  const accepted = JSON.parse(process.env.GOV002_NATIVE_BOUNDARY_EVIDENCE);
+  const forbiddenAllowed = structuredClone(accepted);
+  const authorityWrite = forbiddenAllowed.records.find((item) => item.context === "direct" && item.operation === "authority-write");
+  authorityWrite.nativeStatus = 0;
+  authorityWrite.observedPermission = "ALLOWED";
+  assert.throws(() => assertRealConfinementEvidence(forbiddenAllowed), /REAL_CONFINEMENT_PERMISSION_FAILED/u);
+  const outputDenied = structuredClone(accepted);
+  const output = outputDenied.records.find((item) => item.context === "direct" && item.operation === "role-output-write");
+  output.nativeStatus = 1;
+  output.observedPermission = "DENIED";
+  assert.throws(() => assertRealConfinementEvidence(outputDenied), /REAL_CONFINEMENT_PERMISSION_FAILED/u);
+  const drift = structuredClone(accepted);
+  drift.records.find((item) => item.context === "descendant" && item.subject !== null).postflightIdentity.inode += 1;
+  assert.throws(() => assertRealConfinementEvidence(drift), /REAL_CONFINEMENT_IDENTITY_DRIFT/u);
+});
+
+test("offline wrapper retains TAP aggregate evidence without hardcoding a total", () => {
+  const source = fs.readFileSync(fileURLToPath(new URL("../scripts/test-offline.sh", import.meta.url)), "utf8");
+  assert.match(source, /--test-reporter=tap/u);
+  assert.match(source, /OFFLINE_RUNNER_AGGREGATE tests=%s pass=%s fail=%s/u);
+  assert.match(source, /OFFLINE_WRAPPER_CHECKS pass=%s fail=0/u);
+  assert.doesNotMatch(source, /(?:tests|pass|fail)[=: ]+149/u);
 });
 
 test("mandatory wrapper supplied native direct and descendant filesystem-denial evidence", () => {

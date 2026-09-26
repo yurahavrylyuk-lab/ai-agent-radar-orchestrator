@@ -5,6 +5,7 @@ import { spawnSync } from "node:child_process";
 import { sha256Canonical } from "./contracts.mjs";
 
 export const PRODUCTION_AUTHORITY_ROOT = "/Users/yuriy/Library/Application Support/AI Agent Radar Orchestrator/authority";
+export const PRODUCTION_CONTROLLER_ROOT = "/Users/yuriy/Documents/IT Study/General/General/AI Agents/ai-agent-radar-orchestrator";
 export const PROTECTED_REAL_TARGET_ROOT = "/Users/yuriy/Documents/IT Study/General/General/AI Agents/The AI Monitoring Agent";
 export const DISPOSABLE_AUTHORITY_TEST_FLAG = "GOV002_TEST_DISPOSABLE_AUTHORITY";
 
@@ -180,6 +181,103 @@ export function assertConfinementProbeResults(diagnostic) {
   }
   if (diagnostic.forbiddenArtifacts.length !== 0 || diagnostic.postIdentityErrors.length !== 0) throw new Error("CONFINEMENT_PROBE_SIDE_EFFECT_OR_IDENTITY_DRIFT");
   return true;
+}
+
+const REAL_PERMISSION_CHECKS = Object.freeze([
+  ["authority-read", "authorityRoot", "file-read-data", "DENIED"],
+  ["authority-write", "authorityRoot", "file-write-data", "DENIED"],
+  ["controller-write", "controllerRoot", "file-write-data", "DENIED"],
+  ["target-write", "targetRoot", "file-write-data", "DENIED"],
+  ["role-output-write", "roleOutputRoot", "file-write-data", "ALLOWED"],
+  ["network-inbound", null, "network-inbound", "DENIED"],
+  ["network-outbound", null, "network-outbound", "DENIED"],
+]);
+
+function nativePermissionProbeSource() {
+  return [
+    "import ctypes,json,os,subprocess,sys",
+    "lib=ctypes.CDLL('/usr/lib/libsandbox.dylib')",
+    "check=lib.sandbox_check",
+    "check.argtypes=[ctypes.c_int,ctypes.c_char_p,ctypes.c_int]",
+    "check.restype=ctypes.c_int",
+    "roots=json.loads(os.environ['GOV002_NATIVE_ROOTS'])",
+    "checks=json.loads(os.environ['GOV002_NATIVE_CHECKS'])",
+    "def query(item):",
+    " operation,subject,native_operation,expected=item",
+    " status=check(os.getpid(),native_operation.encode(),0) if subject is None else check(os.getpid(),native_operation.encode(),1,ctypes.c_char_p(roots[subject].encode()))",
+    " return {'operation':operation,'subject':subject,'nativeOperation':native_operation,'expectedPermission':expected,'nativeStatus':status}",
+    "def query_all(): return [query(item) for item in checks]",
+    "if '--descendant' in sys.argv:",
+    " print(json.dumps(query_all()))",
+    " raise SystemExit(0)",
+    "child=subprocess.run([sys.executable,'-B','-c',os.environ['GOV002_NATIVE_SOURCE'],'--descendant'],capture_output=True,text=True,env=os.environ)",
+    "descendant=None",
+    "try: descendant=json.loads(child.stdout)",
+    "except Exception: pass",
+    "print(json.dumps({'direct':query_all(),'descendant':descendant,'childExitStatus':child.returncode,'childStderr':child.stderr}))",
+  ].join("\n");
+}
+
+function permissionFromNativeStatus(status) {
+  if (status === 1) return "DENIED";
+  if (status === 0) return "ALLOWED";
+  return "QUERY_ERROR";
+}
+
+function realEvidenceRecord(item, context, roots, postflightRoots) {
+  const preflight = item.subject === null ? null : roots[item.subject];
+  const postflight = item.subject === null ? null : postflightRoots[item.subject];
+  return Object.freeze({
+    operation: item.operation,
+    subject: item.subject,
+    rawPath: preflight?.rawRoot ?? null,
+    canonicalPath: preflight?.canonicalRoot ?? null,
+    expectedPermission: item.expectedPermission,
+    observedPermission: permissionFromNativeStatus(item.nativeStatus),
+    nativeOperation: item.nativeOperation,
+    nativeStatus: item.nativeStatus,
+    context,
+    preflightIdentity: preflight === null ? null : { type: preflight.type, device: preflight.device, inode: preflight.inode, ownerUid: preflight.ownerUid, mode: preflight.mode },
+    postflightIdentity: postflight === null ? null : { type: postflight.type, device: postflight.device, inode: postflight.inode, ownerUid: postflight.ownerUid, mode: postflight.mode },
+  });
+}
+
+export function assertRealConfinementEvidence(evidence, { expectedControllerRoot = null, expectedAuthorityRoot = null, expectedTargetRoot = null } = {}) {
+  if (!evidence || evidence.mechanism !== "MACOS_SANDBOX_CHECK" || evidence.sandboxExitStatus !== 0 || evidence.descendantExitStatus !== 0 || evidence.stderr !== "" || evidence.descendantStderr !== "" || evidence.protectedPathMutationAttempts !== 0 || !Array.isArray(evidence.records)) throw new Error("REAL_CONFINEMENT_EVIDENCE_INCOMPLETE");
+  const expectedCount = REAL_PERMISSION_CHECKS.length * 2;
+  const keys = evidence.records.map((item) => `${item.context}:${item.operation}`);
+  if (evidence.records.length !== expectedCount || new Set(keys).size !== expectedCount) throw new Error("REAL_CONFINEMENT_RESULT_SET_INVALID");
+  for (const context of ["direct", "descendant"]) for (const [operation, subject, nativeOperation, expectedPermission] of REAL_PERMISSION_CHECKS) {
+    const record = evidence.records.find((item) => item.context === context && item.operation === operation);
+    if (!record || record.subject !== subject || record.nativeOperation !== nativeOperation || record.expectedPermission !== expectedPermission) throw new Error(`REAL_CONFINEMENT_RESULT_MISSING:${context}:${operation}`);
+    if (![0, 1].includes(record.nativeStatus) || record.observedPermission !== expectedPermission) throw new Error(`REAL_CONFINEMENT_PERMISSION_FAILED:${context}:${operation}:${record.observedPermission}:${record.nativeStatus}`);
+    if (subject !== null && (record.rawPath === null || record.canonicalPath === null || record.preflightIdentity?.type !== "directory" || JSON.stringify(record.preflightIdentity) !== JSON.stringify(record.postflightIdentity))) throw new Error(`REAL_CONFINEMENT_IDENTITY_DRIFT:${context}:${operation}`);
+  }
+  const roots = evidence.roots;
+  if (!roots || (expectedControllerRoot !== null && roots.controllerRoot.canonicalRoot !== expectedControllerRoot) || (expectedAuthorityRoot !== null && roots.authorityRoot.canonicalRoot !== expectedAuthorityRoot) || (expectedTargetRoot !== null && roots.targetRoot.canonicalRoot !== expectedTargetRoot)) throw new Error("REAL_CONFINEMENT_FIXED_ROOT_MISMATCH");
+  return true;
+}
+
+export function runNativePermissionDiagnostic({ authorityRoot, controllerRoot, targetRoot, roleOutputRoot }) {
+  const policy = roleSandboxProfile({ authorityRoot, controllerRoot, targetRoot, roleOutputRoot });
+  for (const root of Object.values(policy.roots)) assertBoundaryRootIdentity(root);
+  const source = nativePermissionProbeSource();
+  const env = { ...process.env, GOV002_NATIVE_ROOTS: JSON.stringify(Object.fromEntries(Object.entries(policy.roots).map(([name, root]) => [name, root.canonicalRoot]))), GOV002_NATIVE_CHECKS: JSON.stringify(REAL_PERMISSION_CHECKS), GOV002_NATIVE_SOURCE: source };
+  const result = spawnSync("/usr/bin/sandbox-exec", ["-p", policy.profile, "/usr/bin/python3", "-B", "-c", source], { env, encoding: "utf8" });
+  let output = null; try { output = JSON.parse(result.stdout); } catch {}
+  const postflightRoots = {};
+  for (const [name, root] of Object.entries(policy.roots)) postflightRoots[name] = assertBoundaryRootIdentity(root);
+  const direct = Array.isArray(output?.direct) ? output.direct.map((item) => realEvidenceRecord(item, "direct", policy.roots, postflightRoots)) : [];
+  const descendant = Array.isArray(output?.descendant) ? output.descendant.map((item) => realEvidenceRecord(item, "descendant", policy.roots, postflightRoots)) : [];
+  const evidence = Object.freeze({ mechanism: "MACOS_SANDBOX_CHECK", policyDigest: policy.digest, roots: policy.roots, records: Object.freeze([...direct, ...descendant]), sandboxExitStatus: result.status, descendantExitStatus: output?.childExitStatus ?? null, stderr: result.stderr.trim(), descendantStderr: output?.childStderr?.trim() ?? "", protectedPathMutationAttempts: 0 });
+  assertRealConfinementEvidence(evidence);
+  return evidence;
+}
+
+export function runRealConfinementDiagnostic({ roleOutputRoot }) {
+  const evidence = runNativePermissionDiagnostic({ authorityRoot: PRODUCTION_AUTHORITY_ROOT, controllerRoot: PRODUCTION_CONTROLLER_ROOT, targetRoot: PROTECTED_REAL_TARGET_ROOT, roleOutputRoot });
+  assertRealConfinementEvidence(evidence, { expectedAuthorityRoot: fs.realpathSync(PRODUCTION_AUTHORITY_ROOT), expectedControllerRoot: fs.realpathSync(PRODUCTION_CONTROLLER_ROOT), expectedTargetRoot: fs.realpathSync(PROTECTED_REAL_TARGET_ROOT) });
+  return evidence;
 }
 
 export function verifyDisposableConfinement({ now = new Date().toISOString() } = {}) {
