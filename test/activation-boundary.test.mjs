@@ -172,9 +172,15 @@ test("allowed forbidden permissions, denied output, and identity drift fail clos
 test("offline wrapper retains TAP aggregate evidence without hardcoding a total", () => {
   const source = fs.readFileSync(fileURLToPath(new URL("../scripts/test-offline.sh", import.meta.url)), "utf8");
   assert.match(source, /--test-reporter=tap/u);
+  assert.match(source, /tee "\$runner_output" < "\$runner_fifo"/u);
+  assert.match(source, /parse_tap_aggregate/u);
+  assert.match(source, /wrapper_expect_failure parse_tap_aggregate "\$reporting_fixture\/missing\.tap"/u);
+  assert.match(source, /wrapper_expect_failure parse_tap_aggregate "\$reporting_fixture\/malformed\.tap"/u);
+  assert.match(source, /report_runner "\$reporting_fixture\/valid\.tap" 1/u);
+  assert.match(source, /exit "\$report_status"/u);
   assert.match(source, /OFFLINE_RUNNER_AGGREGATE tests=%s pass=%s fail=%s/u);
-  assert.match(source, /OFFLINE_WRAPPER_CHECKS pass=%s fail=0/u);
-  assert.doesNotMatch(source, /(?:tests|pass|fail)[=: ]+149/u);
+  assert.match(source, /OFFLINE_WRAPPER_CHECKS pass=%s fail=%s/u);
+  assert.doesNotMatch(source, /(?:tests|pass|fail)[=: ]+(?:149|154|7)/u);
 });
 
 test("mandatory wrapper supplied native direct and descendant filesystem-denial evidence", () => {
