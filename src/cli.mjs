@@ -2,10 +2,11 @@
 import fs from "node:fs";
 import path from "node:path";
 import { parseJsonStrict } from "./contracts.mjs";
-import { controllerStatus, enqueueRequest, initializeController, isRealTarget, newestSummary, preparePendingWorkspace, runRehearsal } from "./coordinator.mjs";
+import { controllerStatus, enqueueRequest, initializeController, newestSummary, preparePendingWorkspace, runRehearsal } from "./coordinator.mjs";
 import { createLocalCheckpoint } from "./local-checkpoint.mjs";
 import { integrateFixtureCandidate } from "./local-integration.mjs";
 import { readState } from "./local-store.mjs";
+import { INTERACTIVE_CONFIRMATION_STATES, readInteractiveConfirmation } from "./interactive-confirmation.mjs";
 import { commitPilotAuthorization, preparePilotAuthorization, showPilotAuthorization } from "./pilot-authorization.mjs";
 import { admitRealPilotRequest } from "./real-pilot-admission.mjs";
 import { integrateRealCandidate } from "./real-local-integration.mjs";
@@ -26,10 +27,19 @@ async function main(argv) {
     if (argv.includes("--now") || argv.includes("--yes")) throw new Error("AUTOMATIC_OR_TIME_OVERRIDE_FORBIDDEN");
     const file = option(argv, "--file"); const approvalFile = option(argv, "--approval-file"); if (!file || !approvalFile) throw new Error("REQUEST_AND_APPROVAL_FILE_REQUIRED");
     const request = readJson(file); const humanApproval = readJson(approvalFile); const proposal = preparePilotAuthorization({ statePath, request, humanApproval, controllerRoot: process.cwd() });
-    process.stderr.write(`${JSON.stringify({ proposedAuthorization: proposal.grant, authorizationDigest: proposal.grant.authorizationDigest }, null, 2)}\n`);
-    process.stderr.write(`Type CONFIRM ${proposal.grant.authorizationDigest} to issue this single-use authorization:\n`);
-    if (isRealTarget(request.targetRoot) && !process.stdin.isTTY) throw new Error("INTERACTIVE_TTY_CONFIRMATION_REQUIRED");
-    const confirmation = fs.readFileSync(0, "utf8").trim(); print(commitPilotAuthorization({ statePath, proposal, confirmation })); return;
+    const expectedConfirmation = `CONFIRM ${proposal.grant.authorizationDigest}`;
+    const displayText = `${JSON.stringify({ proposedAuthorization: proposal.grant, authorizationDigest: proposal.grant.authorizationDigest }, null, 2)}\nType ${expectedConfirmation} to issue this single-use authorization:\n`;
+    let flowState = null; const transition = (next) => { flowState = next; };
+    try {
+      const confirmation = await readInteractiveConfirmation({ input: process.stdin, output: process.stderr, displayText, expectedConfirmation, onStateChange: transition });
+      transition(INTERACTIVE_CONFIRMATION_STATES.ISSUING);
+      const issued = commitPilotAuthorization({ statePath, proposal, confirmation });
+      transition(INTERACTIVE_CONFIRMATION_STATES.ISSUED);
+      print(issued); return;
+    } catch (error) {
+      if (flowState !== INTERACTIVE_CONFIRMATION_STATES.ISSUED && flowState !== INTERACTIVE_CONFIRMATION_STATES.ABORTED) transition(INTERACTIVE_CONFIRMATION_STATES.ABORTED);
+      throw error;
+    }
   }
   if (command === "show-authorization") { const id = option(argv, "--authorization"); if (!id) throw new Error("AUTHORIZATION_ID_REQUIRED"); print(showPilotAuthorization(statePath, id)); return; }
   if (command === "integrate-local") { if (["--now", "--target", "--candidate", "--branch", "--commit"].some((flag) => argv.includes(flag))) throw new Error("REAL_INTEGRATION_OVERRIDE_FORBIDDEN"); const cycleId = option(argv, "--cycle"); if (!cycleId) throw new Error("CYCLE_ID_REQUIRED"); print(integrateRealCandidate({ statePath, cycleId, controllerRoot: process.cwd() })); return; }

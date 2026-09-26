@@ -2,8 +2,9 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { spawn, spawnSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import test from "node:test";
+import { runDisposableAuthorizationPty } from "./helpers/interactive-confirmation-pty.mjs";
 
 const cli = path.resolve("src/cli.mjs");
 const node = "/usr/local/bin/node";
@@ -20,18 +21,9 @@ function writeJson(root, name, value) { const file = path.join(root, name); fs.w
 function commit(root, message) { run(git, ["add", "-A"], root); run(git, ["-c", "user.name=CLI Fixture", "-c", "user.email=cli@example.invalid", "commit", "--no-gpg-sign", "-m", message], root); return run(git, ["rev-parse", "HEAD"], root).trim(); }
 
 async function authorize({ cwd, statePath, requestFile, approvalFile }) {
-  return await new Promise((resolve, reject) => {
-    const child = spawn(node, [cli, "authorize-pilot", "--state", statePath, "--file", requestFile, "--approval-file", approvalFile], { cwd, stdio: ["pipe", "pipe", "pipe"], env: { ...process.env, ...disposableEnv } });
-    let stdout = ""; let stderr = ""; let confirmed = false;
-    child.stdout.on("data", (chunk) => { stdout += chunk; });
-    child.stderr.on("data", (chunk) => {
-      stderr += chunk;
-      const match = stderr.match(/"authorizationDigest":\s*"([0-9a-f]{64})"/u);
-      if (match && !confirmed) { confirmed = true; child.stdin.end(`CONFIRM ${match[1]}\n`); }
-    });
-    child.on("error", reject);
-    child.on("close", (status) => status === 0 ? resolve(JSON.parse(stdout)) : reject(new Error(`authorize-pilot failed (${status}): ${stderr}`)));
-  });
+  runDisposableAuthorizationPty({ cwd, statePath, requestFile, approvalFile, env: { ...process.env, ...disposableEnv } });
+  const state = JSON.parse(fs.readFileSync(statePath, "utf8")); const record = state.authorizations.at(-1);
+  return { status: record.lifecycle.status, authorizationId: record.grant.authorizationId, authorizationDigest: record.grant.authorizationDigest, statePath };
 }
 
 test("public CLI completes one human-authorized disposable lifecycle and preserves exact candidate identity", async () => {
