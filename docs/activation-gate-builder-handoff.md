@@ -51,3 +51,13 @@ No other existing test was changed merely for compatibility. No dependency, work
 ## Stop condition
 
 This Builder checkpoint is local only. No real authority directory was created, no real authorization was issued, no real pilot ran, no protected-target mutation occurred, and no push was performed. Stop for independent Analyst review, followed by Architect disposition.
+
+## Confinement canonicalization correction
+
+The stopped trusted-authorization preflight exposed `ROLE_FILESYSTEM_CONFINEMENT_UNAVAILABLE:71`. Disposable A/B evidence reproduced the exact failure when the sandbox profile used Node's `/var/...` temporary spelling and showed all file protections succeed when the identical directories were addressed through their verified `/private/var/...` canonical spelling. Both spellings had the same device and inode. The correction therefore canonicalizes trusted boundary roots with `fs.realpathSync`, captures filesystem identity and ownership/mode evidence, permits only the proven macOS `/var` alias, rejects other symlink redirection, traversal, replacement, identity mismatch, and output/protected overlap, and constructs the policy and probe environment from the same canonical roots.
+
+The verifier now records independent safe results for direct and descendant authority reads/writes, controller and target writes, the positive role-output control, and inbound/outbound network denial. Missing results, unexpected errors, forbidden side effects, or identity drift fail closed. The offline wrapper independently verifies its canonical disposable root and its device/inode before and after the confinement probe.
+
+Correction verification retained 149 top-level tests: 149 passed, 0 failed, under `/bin/sh scripts/test-offline.sh`. The wrapper reported direct and descendant authority/controller/target denial with `EPERM`, designated output writes allowed, and both network directions denied. A separate non-destructive real-path diagnostic used native path-specific `sandbox_check` queries only: authority reads and writes, controller writes, target writes, and both network directions were denied for the direct process and its descendant; the temporary output path was allowed. It revalidated the captured device/inode evidence before and after and performed zero protected-path mutations.
+
+Authorization remains stopped. The original request and approval are preserved byte-for-byte; no proposal, digest, ledger, grant, cycle, pilot role, integration, target mutation, or push is part of this correction. Any future authorization must bind to a separately reviewed, accepted, and published release containing this fix.
