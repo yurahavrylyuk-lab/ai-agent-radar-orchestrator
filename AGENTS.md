@@ -113,6 +113,13 @@ Preserve the accepted limits:
   Human waiting is excluded.
 * Zero additional paid execution; included subscription capacity only.
 * No paid fallback, model fallback, or automatic role launch.
+* No automatic credit purchase, additional-usage-capacity purchase, paid or
+  overage-path upgrade, or autonomous billing or spending authorization.
+
+If included subscription or free capacity is exhausted, unavailable, or
+uncertain: WAIT / HALT. Do not purchase credits or switch to a paid execution
+mechanism. Only a separate explicit human governance decision may alter this
+rule.
 
 Do not introduce or invoke live provider, email, deployment, scheduling,
 publication, credential, or billing adapters.
@@ -186,6 +193,14 @@ Real execution requires:
 * Separate explicit human-controlled authority provisioning.
 * Verified real role confinement.
 * Explicit human approval and exactly one digest-confirmed authorization.
+
+Only explicit digest-specific interactive human confirmation is valid for real
+pilot authorization. The human must confirm the exact authorization digest for
+the exact authorization being issued. No `--yes`, `-y`, environment variable or
+environment value, configuration flag, CLI caller override, role result,
+Architect ACCEPT alone, Builder output, Analyst PASS, fixture shortcut, test
+shortcut, prefilled approval, unattended confirmation, or generic prior consent
+may substitute. No agent role may self-confirm on behalf of the human.
 
 Trusted authority root:
 /Users/yuriy/Library/Application Support/AI Agent Radar Orchestrator/authority/
