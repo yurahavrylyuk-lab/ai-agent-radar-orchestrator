@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { acquireLock, readState, replaceStateAtomic } from "./local-store.mjs";
-import { PHASE2, sha256Canonical } from "./contracts.mjs";
+import { PHASE2, parseJsonStrict, sha256Canonical } from "./contracts.mjs";
 import { controllerReleaseIdentity, executeBoundRole, initializeExecutionJournal, reconcileExecutionJournal } from "./role-execution.mjs";
 import { OfflineFixtureTransport, OFFLINE_FIXTURE_ADAPTER_VERSION, OFFLINE_FIXTURE_DIGEST, OFFLINE_FIXTURE_SCENARIOS } from "./adapters/offline-fixture.mjs";
 import { enqueueRequest, initializeController, isRealTarget, preparePendingWorkspace } from "./coordinator.mjs";
@@ -13,10 +13,61 @@ import { createIntegrationPreparation } from "./integration-preparation.mjs";
 export const OFFLINE_EXECUTION_POLICY = Object.freeze({ version: "offline-autopilot-policy-r1", evidenceMode: "OFFLINE_FIXTURE", network: false, providers: false, publication: false, deployment: false, scheduling: false, paidExecution: false, maxRoleExecutionSeconds: 900, maxCycleExecutionSeconds: 5400, maxIterations: 3, stopAt: "INTEGRATION_PREPARATION" });
 export const OFFLINE_EXECUTION_POLICY_DIGEST = sha256Canonical(OFFLINE_EXECUTION_POLICY);
 
-function inside(parent, child) { const relative = path.relative(parent, child); return relative !== "" && relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative); }
-function assertDisposableRuntime(root) {
-  const resolved = path.resolve(root); const allowedRoots = [...new Set([fs.realpathSync(os.tmpdir()), fs.realpathSync("/private/tmp")])]; const parent = fs.realpathSync(path.dirname(resolved)); const candidate = path.join(parent, path.basename(resolved));
-  if (!allowedRoots.some((temporary) => inside(temporary, candidate)) || isRealTarget(candidate)) throw new Error("OFFLINE_AUTOPILOT_DISPOSABLE_RUNTIME_REQUIRED"); return candidate;
+const RUNTIME_IDENTITY_FILE = ".offline-autopilot-runtime.json";
+function identity(filePath) {
+  const stat = fs.lstatSync(filePath);
+  return Object.freeze({ canonicalPath: fs.realpathSync(filePath), type: stat.isDirectory() ? "directory" : stat.isFile() ? "file" : stat.isSymbolicLink() ? "symlink" : "other", device: stat.dev, inode: stat.ino, owner: stat.uid, mode: stat.mode & 0o7777 });
+}
+function sameIdentity(left, right) { return left.canonicalPath === right.canonicalPath && left.type === right.type && left.device === right.device && left.inode === right.inode && left.owner === right.owner && left.mode === right.mode; }
+function allowedTemporaryRoots() { return [...new Set([fs.realpathSync(os.tmpdir()), fs.realpathSync("/private/tmp")])]; }
+function allowedRuntimeParent(runtimeRoot, explicitParent) {
+  const requested = path.resolve(runtimeRoot); const requestedParent = path.dirname(requested); const baseRoots = allowedTemporaryRoots();
+  const rawParent = explicitParent === null ? requestedParent : path.resolve(explicitParent);
+  if (rawParent !== requestedParent) throw new Error("OFFLINE_AUTOPILOT_RUNTIME_PARENT_MISMATCH");
+  const parentLeaf = fs.lstatSync(rawParent); const canonicalParent = fs.realpathSync(rawParent);
+  if ((!parentLeaf.isDirectory() && !(explicitParent === null && parentLeaf.isSymbolicLink() && baseRoots.includes(canonicalParent))) || (explicitParent !== null && parentLeaf.isSymbolicLink())) throw new Error("OFFLINE_AUTOPILOT_RUNTIME_PARENT_UNSAFE");
+  const parent = identity(canonicalParent); const parentParent = fs.realpathSync(path.dirname(rawParent));
+  if (explicitParent === null ? !baseRoots.includes(parent.canonicalPath) : !baseRoots.includes(parentParent)) throw new Error("OFFLINE_AUTOPILOT_DISPOSABLE_RUNTIME_REQUIRED");
+  return parent;
+}
+export function createOfflineRuntimeRootGuard(runtimeRoot, { allowedParent = null } = {}) {
+  const requested = path.resolve(runtimeRoot); const parent = allowedRuntimeParent(requested, allowedParent); const candidate = path.join(parent.canonicalPath, path.basename(requested));
+  if (isRealTarget(candidate)) throw new Error("OFFLINE_AUTOPILOT_DISPOSABLE_RUNTIME_REQUIRED");
+  try { fs.lstatSync(requested); throw new Error("OFFLINE_AUTOPILOT_RUNTIME_LEAF_EXISTS"); } catch (error) { if (error.code !== "ENOENT") throw error; }
+  fs.mkdirSync(candidate, { recursive: false, mode: 0o700 });
+  const runtime = identity(candidate);
+  if (runtime.type !== "directory" || runtime.canonicalPath !== candidate || path.dirname(runtime.canonicalPath) !== parent.canonicalPath) throw new Error("OFFLINE_AUTOPILOT_RUNTIME_IDENTITY_INVALID");
+  const guard = Object.freeze({ root: candidate, parent, runtime });
+  assertOfflineRuntimeRootGuard(guard); return guard;
+}
+export function assertOfflineRuntimeRootGuard(guard) {
+  const currentParent = identity(guard.parent.canonicalPath); const currentRuntime = identity(guard.root);
+  if (!sameIdentity(currentParent, guard.parent) || !sameIdentity(currentRuntime, guard.runtime) || currentRuntime.type !== "directory" || path.dirname(currentRuntime.canonicalPath) !== currentParent.canonicalPath) throw new Error("OFFLINE_AUTOPILOT_RUNTIME_IDENTITY_DRIFT");
+  return true;
+}
+export function sealOfflineRuntimeRootGuard(guard) {
+  assertOfflineRuntimeRootGuard(guard);
+  const record = { schemaVersion: 1, parent: guard.parent, runtime: guard.runtime };
+  fs.writeFileSync(path.join(guard.root, RUNTIME_IDENTITY_FILE), `${JSON.stringify(record, null, 2)}\n`, { flag: "wx", mode: 0o600 });
+  assertOfflineRuntimeRootGuard(guard); return guard.root;
+}
+function resumeOfflineRuntimeRoot(runtimeRoot, allowedParent) {
+  const requested = path.resolve(runtimeRoot); const leaf = fs.lstatSync(requested);
+  if (leaf.isSymbolicLink()) throw new Error("OFFLINE_AUTOPILOT_RUNTIME_SYMLINK_LEAF");
+  if (!leaf.isDirectory()) throw new Error("OFFLINE_AUTOPILOT_RUNTIME_LEAF_NOT_DIRECTORY");
+  const parent = allowedRuntimeParent(requested, allowedParent); const runtime = identity(requested); const markerPath = path.join(runtime.canonicalPath, RUNTIME_IDENTITY_FILE);
+  let markerLeaf; try { markerLeaf = fs.lstatSync(markerPath); } catch (error) { if (error.code === "ENOENT") throw new Error("OFFLINE_AUTOPILOT_RUNTIME_LEAF_EXISTS"); throw error; }
+  if (markerLeaf.isSymbolicLink() || !markerLeaf.isFile()) throw new Error("OFFLINE_AUTOPILOT_RUNTIME_IDENTITY_MARKER_UNSAFE");
+  const marker = parseJsonStrict(fs.readFileSync(markerPath, "utf8")); const guard = Object.freeze({ root: runtime.canonicalPath, parent, runtime });
+  if (marker.schemaVersion !== 1 || !sameIdentity(marker.parent, parent) || !sameIdentity(marker.runtime, runtime)) throw new Error("OFFLINE_AUTOPILOT_RUNTIME_IDENTITY_DRIFT");
+  assertOfflineRuntimeRootGuard(guard); return guard.root;
+}
+export function prepareOfflineRuntimeRoot(runtimeRoot, { allowedParent = null } = {}) {
+  const requested = path.resolve(runtimeRoot);
+  try { fs.lstatSync(requested); return resumeOfflineRuntimeRoot(requested, allowedParent); } catch (error) {
+    if (error.code !== "ENOENT") throw error;
+    return sealOfflineRuntimeRootGuard(createOfflineRuntimeRootGuard(requested, { allowedParent }));
+  }
 }
 function createTarget(root, now) {
   fs.mkdirSync(root, { recursive: true, mode: 0o700 }); git(root, ["init", "-b", "main"], { write: true }); fs.writeFileSync(path.join(root, "README.md"), "# Disposable offline autopilot target\n", { mode: 0o644 }); git(root, ["add", "README.md"], { write: true }); git(root, ["-c", "user.name=Offline Fixture", "-c", "user.email=offline@example.invalid", "commit", "--no-gpg-sign", "-m", "offline fixture baseline"], { write: true, env: { GIT_AUTHOR_DATE: now, GIT_COMMITTER_DATE: now } }); const baseline = git(root, ["rev-parse", "HEAD"]).stdout.trim(); git(root, ["branch", "self-improvement", baseline], { write: true }); git(root, ["checkout", "self-improvement"], { write: true }); return baseline;
@@ -34,8 +85,8 @@ function initializeRun(root, scenario, controllerRoot, now) {
 }
 function loadRun(root) { return JSON.parse(fs.readFileSync(path.join(root, "offline-run.json"), "utf8")); }
 
-export function runOfflineAutopilot({ runtimeRoot, scenario = "success", controllerRoot = process.cwd(), expectedControllerCommit = null, inject = null, now = "2026-09-27T12:00:00.000Z" }) {
-  if (!OFFLINE_FIXTURE_SCENARIOS.includes(scenario)) throw new Error("OFFLINE_SCENARIO_UNSUPPORTED"); const root = assertDisposableRuntime(runtimeRoot); fs.mkdirSync(root, { recursive: true, mode: 0o700 });
+export function runOfflineAutopilot({ runtimeRoot, scenario = "success", controllerRoot = process.cwd(), expectedControllerCommit = null, inject = null, now = "2026-09-27T12:00:00.000Z", allowedRuntimeParent = null }) {
+  if (!OFFLINE_FIXTURE_SCENARIOS.includes(scenario)) throw new Error("OFFLINE_SCENARIO_UNSUPPORTED"); const root = prepareOfflineRuntimeRoot(runtimeRoot, { allowedParent: allowedRuntimeParent });
   const runnerLock = acquireLock(path.join(root, "offline-runner.lock"), { controllerId: "offline-autopilot", generation: 1, pid: process.pid }); if (!runnerLock.acquired) throw Object.assign(new Error("OFFLINE_AUTOPILOT_ALREADY_RUNNING"), { code: "OFFLINE_AUTOPILOT_ALREADY_RUNNING" });
   try {
     const run = fs.existsSync(path.join(root, "offline-run.json")) ? loadRun(root) : initializeRun(root, scenario, controllerRoot, now);

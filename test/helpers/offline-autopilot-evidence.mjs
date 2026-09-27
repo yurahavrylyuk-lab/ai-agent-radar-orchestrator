@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { runOfflineAutopilot } from "../../src/autopilot.mjs";
+import { prepareOfflineRuntimeRoot, runOfflineAutopilot } from "../../src/autopilot.mjs";
 import { acquireLock } from "../../src/local-store.mjs";
 
 const root = fs.realpathSync(process.argv[2]);
@@ -9,7 +9,7 @@ const fixedNow = "2026-09-27T12:00:00.000Z";
 
 function run(name, scenario, options = {}) {
   const runtimeRoot = path.join(root, name);
-  const result = runOfflineAutopilot({ runtimeRoot, scenario, controllerRoot, now: fixedNow, ...options });
+  const result = runOfflineAutopilot({ runtimeRoot, scenario, controllerRoot, allowedRuntimeParent: root, now: fixedNow, ...options });
   fs.writeFileSync(path.join(runtimeRoot, "result.json"), `${JSON.stringify(result, null, 2)}\n`, { mode: 0o600 });
   return result;
 }
@@ -27,29 +27,29 @@ const revision = run("revision", "revision");
 
 const crashBeforeRoot = path.join(root, "crash-before");
 const crashBefore = expectedFailure(() => run("crash-before", "success", { inject: { afterRoles: 0, phase: "before-execution" } }), /INJECTED_CRASH_BEFORE_EXECUTION/u);
-const crashBeforeRecovery = runOfflineAutopilot({ runtimeRoot: crashBeforeRoot, scenario: "success", controllerRoot, now: fixedNow });
+const crashBeforeRecovery = runOfflineAutopilot({ runtimeRoot: crashBeforeRoot, scenario: "success", controllerRoot, allowedRuntimeParent: root, now: fixedNow });
 
 const crashBetweenRoot = path.join(root, "crash-between");
 const crashBetween = expectedFailure(() => run("crash-between", "success", { inject: { betweenRoles: 1 } }), /INJECTED_CRASH_BETWEEN_ROLES/u);
-const crashBetweenRecovery = runOfflineAutopilot({ runtimeRoot: crashBetweenRoot, scenario: "success", controllerRoot, now: fixedNow });
+const crashBetweenRecovery = runOfflineAutopilot({ runtimeRoot: crashBetweenRoot, scenario: "success", controllerRoot, allowedRuntimeParent: root, now: fixedNow });
 
 const crashDuringRoot = path.join(root, "crash-during-builder");
 const crashDuring = expectedFailure(() => run("crash-during-builder", "success", { inject: { afterRoles: 1, phase: "during-builder" } }), /INJECTED_CRASH_DURING_BUILDER/u);
-const crashDuringRecovery = expectedFailure(() => runOfflineAutopilot({ runtimeRoot: crashDuringRoot, scenario: "success", controllerRoot, now: fixedNow }), /RECONCILIATION_REQUIRED/u);
+const crashDuringRecovery = expectedFailure(() => runOfflineAutopilot({ runtimeRoot: crashDuringRoot, scenario: "success", controllerRoot, allowedRuntimeParent: root, now: fixedNow }), /RECONCILIATION_REQUIRED/u);
 
 const crashAfterCaptureRoot = path.join(root, "crash-after-capture");
 const crashAfterCapture = expectedFailure(() => run("crash-after-capture", "success", { inject: { afterRoles: 0, phase: "after-capture" } }), /INJECTED_CRASH_AFTER_CAPTURE/u);
-const crashAfterCaptureRecovery = expectedFailure(() => runOfflineAutopilot({ runtimeRoot: crashAfterCaptureRoot, scenario: "success", controllerRoot, now: fixedNow }), /RECONCILIATION_REQUIRED/u);
+const crashAfterCaptureRecovery = expectedFailure(() => runOfflineAutopilot({ runtimeRoot: crashAfterCaptureRoot, scenario: "success", controllerRoot, allowedRuntimeParent: root, now: fixedNow }), /RECONCILIATION_REQUIRED/u);
 
 const uncertainRoot = path.join(root, "uncertain-submission");
 const uncertainSubmission = expectedFailure(() => run("uncertain-submission", "success", { inject: { afterRoles: 0, phase: "uncertain-submission" } }), /PERSISTENCE_DURABILITY_UNCERTAIN/u);
-const uncertainRecovery = expectedFailure(() => runOfflineAutopilot({ runtimeRoot: uncertainRoot, scenario: "success", controllerRoot, now: fixedNow }), /RECONCILIATION_REQUIRED/u);
+const uncertainRecovery = expectedFailure(() => runOfflineAutopilot({ runtimeRoot: uncertainRoot, scenario: "success", controllerRoot, allowedRuntimeParent: root, now: fixedNow }), /RECONCILIATION_REQUIRED/u);
 
 const duplicateRoot = path.join(root, "duplicate-runner");
-fs.mkdirSync(duplicateRoot, { recursive: true, mode: 0o700 });
+prepareOfflineRuntimeRoot(duplicateRoot, { allowedParent: root });
 const held = acquireLock(path.join(duplicateRoot, "offline-runner.lock"), { controllerId: "offline-autopilot", generation: 1, pid: process.pid });
 if (!held.acquired) throw new Error("DUPLICATE_TEST_LOCK_UNAVAILABLE");
-const duplicateRunner = expectedFailure(() => runOfflineAutopilot({ runtimeRoot: duplicateRoot, scenario: "success", controllerRoot, now: fixedNow }), /OFFLINE_AUTOPILOT_ALREADY_RUNNING/u);
+const duplicateRunner = expectedFailure(() => runOfflineAutopilot({ runtimeRoot: duplicateRoot, scenario: "success", controllerRoot, allowedRuntimeParent: root, now: fixedNow }), /OFFLINE_AUTOPILOT_ALREADY_RUNNING/u);
 held.release();
 
 const uncertaintyRoot = path.join(root, "integration-preparation-uncertainty");
@@ -57,7 +57,7 @@ run("integration-preparation-uncertainty", "success");
 const preparationPath = path.join(uncertaintyRoot, "integration-preparation.json");
 const preparation = JSON.parse(fs.readFileSync(preparationPath, "utf8"));
 fs.writeFileSync(preparationPath, `${JSON.stringify({ ...preparation, candidateCommit: "0".repeat(40) }, null, 2)}\n`);
-const integrationPreparationUncertainty = expectedFailure(() => runOfflineAutopilot({ runtimeRoot: uncertaintyRoot, scenario: "success", controllerRoot, now: fixedNow }), /INTEGRATION_PREPARATION_UNCERTAIN/u);
+const integrationPreparationUncertainty = expectedFailure(() => runOfflineAutopilot({ runtimeRoot: uncertaintyRoot, scenario: "success", controllerRoot, allowedRuntimeParent: root, now: fixedNow }), /INTEGRATION_PREPARATION_UNCERTAIN/u);
 
 const evidence = {
   schemaVersion: 1,

@@ -1,12 +1,18 @@
 import assert from "node:assert/strict";
+import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import test from "node:test";
 import { OfflineFixtureTransport } from "../src/adapters/offline-fixture.mjs";
+import { assertOfflineRuntimeRootGuard, createOfflineRuntimeRootGuard, prepareOfflineRuntimeRoot, runOfflineAutopilot, sealOfflineRuntimeRootGuard } from "../src/autopilot.mjs";
+import { PRODUCTION_AUTHORITY_ROOT, PROTECTED_REAL_TARGET_ROOT } from "../src/operator-boundary.mjs";
 import { MAX_FRAME_BYTES, createExecutionFrame, decodeExecutionFrame, encodeExecutionFrame, validateExecutionFrame } from "../src/role-execution-protocol.mjs";
 import { validateExecutionJournal } from "../src/role-execution.mjs";
+import { captureTargetSnapshot, compareTargetSnapshots } from "../src/target-snapshot.mjs";
 
 function load(file) { return JSON.parse(fs.readFileSync(file, "utf8")); }
+function hash(file) { return crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex"); }
+function uniqueRuntime(name, parent = "/private/tmp") { return path.join(parent, `gov002-${name}-${process.pid}-${crypto.randomUUID()}`); }
 function evidence() {
   const file = process.env.GOV002_OFFLINE_AUTOPILOT_EVIDENCE;
   assert.ok(file, "offline autopilot evidence path must be supplied by scripts/test-offline.sh");
@@ -36,6 +42,44 @@ test("offline fixture transport refuses unsupported scenarios and yields only fr
   const source = fs.readFileSync(new URL("../src/adapters/offline-fixture.mjs", import.meta.url), "utf8");
   assert.doesNotMatch(source, /node:(?:fs|child_process|net|http|https)|\bfetch\s*\(/u);
   assert.doesNotMatch(source, /(?:OpenAI|Anthropic|Gemini|Claude|Codex App Server)/iu);
+});
+
+test("OA-001 rejects a symlink runtime leaf before writing outside allowed temporary roots", () => {
+  const external = fs.mkdtempSync(path.join(process.cwd(), ".oa001-external-")); const runtime = uniqueRuntime("symlink"); const authorityFile = path.join(PRODUCTION_AUTHORITY_ROOT, "authority-state.json");
+  const authorityBefore = hash(authorityFile); const targetBefore = captureTargetSnapshot(PROTECTED_REAL_TARGET_ROOT);
+  try {
+    fs.symlinkSync(external, runtime);
+    assert.throws(() => runOfflineAutopilot({ runtimeRoot: runtime, controllerRoot: process.cwd() }), /OFFLINE_AUTOPILOT_RUNTIME_SYMLINK_LEAF/u);
+    assert.deepEqual(fs.readdirSync(external), []); assert.equal(hash(authorityFile), authorityBefore);
+    assert.deepEqual(compareTargetSnapshots(targetBefore, captureTargetSnapshot(PROTECTED_REAL_TARGET_ROOT)), { equal: true, changed: [] });
+  } finally { try { fs.unlinkSync(runtime); } catch {} fs.rmSync(external, { recursive: true, force: true }); }
+});
+
+test("OA-001 rejects pre-existing regular and unowned directory runtime leaves", () => {
+  const regular = uniqueRuntime("regular"); const directory = uniqueRuntime("directory");
+  try {
+    fs.writeFileSync(regular, "not a runtime\n"); fs.mkdirSync(directory, { mode: 0o700 });
+    assert.throws(() => prepareOfflineRuntimeRoot(regular), /RUNTIME_LEAF_NOT_DIRECTORY/u);
+    assert.throws(() => prepareOfflineRuntimeRoot(directory), /RUNTIME_LEAF_EXISTS/u);
+  } finally { fs.rmSync(regular, { force: true }); fs.rmSync(directory, { recursive: true, force: true }); }
+});
+
+test("OA-001 canonicalizes the known temporary parent alias and creates a fresh direct child", () => {
+  const runtime = uniqueRuntime("alias", "/tmp");
+  try {
+    const canonical = prepareOfflineRuntimeRoot(runtime); assert.equal(canonical, fs.realpathSync(runtime)); assert.equal(path.dirname(canonical), fs.realpathSync("/private/tmp"));
+    const stat = fs.lstatSync(canonical); assert.equal(stat.isDirectory(), true); assert.equal(stat.isSymbolicLink(), false); assert.equal(stat.uid, process.getuid()); assert.equal(stat.mode & 0o7777, 0o700);
+  } finally { fs.rmSync(runtime, { recursive: true, force: true }); }
+});
+
+test("OA-001 detects runtime leaf replacement before its first write", () => {
+  const runtime = uniqueRuntime("race"); const displaced = `${runtime}-original`; const external = fs.mkdtempSync(path.join(process.cwd(), ".oa001-race-external-"));
+  try {
+    const guard = createOfflineRuntimeRootGuard(runtime); fs.renameSync(runtime, displaced); fs.symlinkSync(external, runtime);
+    assert.throws(() => assertOfflineRuntimeRootGuard(guard), /RUNTIME_IDENTITY_DRIFT/u);
+    assert.throws(() => sealOfflineRuntimeRootGuard(guard), /RUNTIME_IDENTITY_DRIFT/u);
+    assert.deepEqual(fs.readdirSync(external), []);
+  } finally { try { fs.unlinkSync(runtime); } catch {} fs.rmSync(displaced, { recursive: true, force: true }); fs.rmSync(external, { recursive: true, force: true }); }
 });
 
 test("success scenario performs the exact automatic handoff and stops before integration", () => {
