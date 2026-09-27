@@ -121,6 +121,27 @@ export function roleSandboxProfile({ authorityRoot, controllerRoot, targetRoot, 
   return Object.freeze({ profile, digest: sha256Canonical({ profile }), roots });
 }
 
+export function offlineExecutorSandboxProfile({ workspaceRoot }) {
+  const roots = Object.freeze({
+    authorityRoot: captureBoundaryRoot(PRODUCTION_AUTHORITY_ROOT, { name: "authorityRoot" }),
+    controllerRoot: captureBoundaryRoot(PRODUCTION_CONTROLLER_ROOT, { name: "controllerRoot" }),
+    targetRoot: captureBoundaryRoot(PROTECTED_REAL_TARGET_ROOT, { name: "targetRoot" }),
+    workspaceRoot: captureBoundaryRoot(workspaceRoot, { name: "workspaceRoot" }),
+  });
+  assertNoBoundaryOverlap({ ...roots, roleOutputRoot: roots.workspaceRoot });
+  const profile = [
+    "(version 1)",
+    "(allow default)",
+    "(deny network*)",
+    "(deny file-write*)",
+    `(deny file-read* file-write* (subpath ${quote(roots.authorityRoot.canonicalRoot)}))`,
+    `(deny file-write* (subpath ${quote(roots.controllerRoot.canonicalRoot)}))`,
+    `(deny file-write* (subpath ${quote(roots.targetRoot.canonicalRoot)}))`,
+    `(allow file-write* (subpath ${quote(roots.workspaceRoot.canonicalRoot)}))`,
+  ].join(" ");
+  return Object.freeze({ profile, digest: sha256Canonical({ profile }), roots });
+}
+
 function detailedProbeSource() {
   function program() {
     const fs = require("node:fs"); const path = require("node:path"); const { spawnSync } = require("node:child_process");

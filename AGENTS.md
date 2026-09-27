@@ -72,6 +72,15 @@ Roles cannot issue authority, edit the authority ledger, mutate the authoritativ
 target, or invoke trusted integration as a substitute for the human operator.
 Preserve controller-owned task identities and validation bindings.
 
+The sole automatic-role exception is the human-started `autopilot-offline`
+command. It uses only the deterministic `OfflineFixtureTransport`, disposable
+authority/state and an independent disposable Git repository below the system
+temporary root. Its Builder child runs under the reviewed macOS sandbox, and
+the run must stop at a non-mutating `INTEGRATION_PREPARATION` record. This
+exception cannot consume production authority, target the AI Agent Radar
+repository, create a production integration intent, contact a provider, or
+authorize automatic real-role launch.
+
 Controller maintenance is a separate explicitly scoped task. It does not
 inherit real-pilot authority or permit bypassing a role sandbox.
 
@@ -112,7 +121,8 @@ Preserve the accepted limits:
 * 15 active minutes per role and 90 cumulative active minutes per cycle.
   Human waiting is excluded.
 * Zero additional paid execution; included subscription capacity only.
-* No paid fallback, model fallback, or automatic role launch.
+* No paid fallback or model fallback. Automatic role launch is forbidden except
+  for the deterministic, disposable `OFFLINE_FIXTURE` autopilot described above.
 * No automatic credit purchase, additional-usage-capacity purchase, paid or
   overage-path upgrade, or autonomous billing or spending authorization.
 

@@ -110,7 +110,7 @@ export const validators = Object.freeze({ request: validateRequest, cycle: valid
 
 const ROLES = ["architect", "builder", "analyst"];
 const PURPOSES = ["ARCHITECT_PLAN", "ARCHITECT_REVISION", "BUILDER_IMPLEMENTATION", "ANALYST_REVIEW", "ARCHITECT_FINAL_DECISION"];
-const EVIDENCE_MODES = ["SIMULATED", "HUMAN_ASSISTED"];
+const EVIDENCE_MODES = ["SIMULATED", "HUMAN_ASSISTED", "OFFLINE_FIXTURE"];
 const ANALYST_STATES = ["PASS", "PASS_WITH_RECOMMENDATIONS", "REVISE", "REJECT", "HUMAN_REVIEW_REQUIRED"];
 const ARCHITECT_DECISIONS = ["ACCEPT", "REVISE", "REJECT", "HUMAN_REVIEW"];
 const HEX40 = /^[0-9a-f]{40}$/u;
@@ -247,8 +247,14 @@ function validateResultContext(value) {
   validateBinding(value.binding, "result.context.binding"); validateAuthorization(value.authorization, "result.context.authorization"); digest(value.planDigest, "result.context.planDigest", true); digest(value.precedingEvidenceDigest, "result.context.precedingEvidenceDigest"); validateResponseSchema(value.responseSchema, "result.context.responseSchema");
 }
 function validateValidationEvidence(value, name) {
-  exactRecord(value, ["schemaVersion", "evidenceType", "provenance", "repositoryId", "evidenceMode", "cycleId", "taskId", "role", "recipeId", "candidateCommit", "outcome", "checkpointIdentityDigest"], name);
-  if (value.schemaVersion !== 2 || value.evidenceType !== "ROLE_VALIDATION_ATTESTATION" || value.provenance !== "HUMAN_ATTESTED") throw new TypeError(`${name} type or provenance is invalid`);
+  const humanFields = ["schemaVersion", "evidenceType", "provenance", "repositoryId", "evidenceMode", "cycleId", "taskId", "role", "recipeId", "candidateCommit", "outcome", "checkpointIdentityDigest"];
+  const executedFields = ["schemaVersion", "evidenceType", "provenance", "repositoryId", "evidenceMode", "cycleId", "taskId", "role", "recipeId", "baselineCommit", "candidateCommit", "treeId", "blobDigest", "recipeVersion", "executionId", "outcome", "checkpointIdentityDigest", "detailsDigest"];
+  const executed = value?.schemaVersion === 3;
+  exactRecord(value, executed ? executedFields : humanFields, name);
+  if (executed) {
+    if (value.evidenceType !== "CONTROLLER_EXECUTED_VALIDATION" || value.provenance !== "CONTROLLER_EXECUTED" || value.evidenceMode !== "OFFLINE_FIXTURE") throw new TypeError(`${name} executed type or provenance is invalid`);
+    oid(value.baselineCommit, `${name}.baselineCommit`); oid(value.treeId, `${name}.treeId`); digest(value.blobDigest, `${name}.blobDigest`); string(value.recipeVersion, `${name}.recipeVersion`); string(value.executionId, `${name}.executionId`); digest(value.detailsDigest, `${name}.detailsDigest`);
+  } else if (value.schemaVersion !== 2 || value.evidenceType !== "ROLE_VALIDATION_ATTESTATION" || value.provenance !== "HUMAN_ATTESTED") throw new TypeError(`${name} type or provenance is invalid`);
   for (const field of ["repositoryId", "cycleId", "taskId", "recipeId"]) string(value[field], `${name}.${field}`);
   oneOf(value.evidenceMode, EVIDENCE_MODES, `${name}.evidenceMode`); oneOf(value.role, ["builder", "analyst"], `${name}.role`); oid(value.candidateCommit, `${name}.candidateCommit`); oneOf(value.outcome, ["PASS", "FAIL"], `${name}.outcome`); digest(value.checkpointIdentityDigest, `${name}.checkpointIdentityDigest`);
 }

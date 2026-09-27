@@ -126,6 +126,15 @@ export GOV002_NATIVE_BOUNDARY_EVIDENCE
 cleanup_boundary
 trap - EXIT HUP INT TERM
 
+autopilot_evidence_root="$(mktemp -d /private/tmp/gov002-offline-autopilot-evidence.XXXXXX)"
+cleanup_autopilot_evidence() {
+  /usr/local/bin/node -e 'require("node:fs").rmSync(process.argv[1], { recursive: true, force: true })' "$autopilot_evidence_root"
+}
+trap cleanup_autopilot_evidence EXIT HUP INT TERM
+GOV002_OFFLINE_AUTOPILOT_EVIDENCE="$(/usr/local/bin/node test/helpers/offline-autopilot-evidence.mjs "$autopilot_evidence_root")"
+export GOV002_OFFLINE_AUTOPILOT_EVIDENCE
+wrapper_check test -f "$GOV002_OFFLINE_AUTOPILOT_EVIDENCE"
+
 wrapper_check /usr/bin/sandbox-exec -p "$policy" /usr/bin/python3 -B -c '
 import ctypes, os
 lib = ctypes.CDLL("/usr/lib/libsandbox.dylib")
@@ -141,7 +150,7 @@ export GOV002_FS_BOUNDARY_PROVED=MACOS_SANDBOX_EXEC_DIRECT_AND_DESCENDANT_DENIAL
 runner_output="$(mktemp /private/tmp/gov002-node-test-output.XXXXXX)"
 runner_fifo="$runner_output.fifo"
 mkfifo "$runner_fifo"
-cleanup_runner() { rm -f "$runner_output" "$runner_fifo"; }
+cleanup_runner() { rm -f "$runner_output" "$runner_fifo"; cleanup_autopilot_evidence; }
 trap cleanup_runner EXIT HUP INT TERM
 tee "$runner_output" < "$runner_fifo" &
 tee_pid=$!

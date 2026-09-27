@@ -14,6 +14,7 @@ import { finishRole, startRole } from "./role-timing.mjs";
 import { submitRoleResult } from "./result-submission.mjs";
 import { migrateStateV1ToV2 } from "./state-migration.mjs";
 import { renderTaskPrompt } from "./task-renderer.mjs";
+import { runOfflineAutopilot } from "./autopilot.mjs";
 
 function option(args, name, fallback = null) { const index = args.indexOf(name); if (index === -1) return fallback; if (!args[index + 1] || args[index + 1].startsWith("--")) throw new Error(`MISSING_OPTION_VALUE:${name}`); return args[index + 1]; }
 function readJson(file) { return parseJsonStrict(fs.readFileSync(file, "utf8")); }
@@ -22,6 +23,11 @@ function print(value) { process.stdout.write(typeof value === "string" ? value :
 async function main(argv) {
   const command = argv[0]; const statePath = path.resolve(option(argv, "--state", ".runtime/controller/state.json"));
   const now = option(argv, "--now", new Date().toISOString());
+  if (command === "autopilot-offline") {
+    if (argv.includes("--state") || argv.includes("--target") || argv.includes("--authority")) throw new Error("OFFLINE_AUTOPILOT_PROTECTED_OVERRIDE_FORBIDDEN");
+    const runtimeRoot = option(argv, "--runtime"); if (!runtimeRoot) throw new Error("OFFLINE_AUTOPILOT_RUNTIME_REQUIRED");
+    print(runOfflineAutopilot({ runtimeRoot: path.resolve(runtimeRoot), scenario: option(argv, "--scenario", "success"), controllerRoot: process.cwd(), expectedControllerCommit: option(argv, "--controller-commit", null), now })); return;
+  }
   if (command === "rehearse") { const root = path.resolve(option(argv, "--runtime", `.runtime/rehearsal-${Date.now()}`)); print(await runRehearsal(root)); return; }
   if (command === "authorize-pilot") {
     if (argv.includes("--now") || argv.includes("--yes")) throw new Error("AUTOMATIC_OR_TIME_OVERRIDE_FORBIDDEN");

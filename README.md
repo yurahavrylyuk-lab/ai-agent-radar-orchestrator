@@ -1,6 +1,27 @@
 # AI Agent Radar Offline Self-Improvement Controller
 
-This repository is a dependency-free, local-only governance controller. Phase 1 established the fail-closed offline prototype; GOV-002 Phase 2 adds human-assisted, data-only role handoffs and trusted Git operations that are enabled only for disposable fixture repositories. It does not launch Codex, contact providers, publish Git changes, send notifications, schedule work, or activate the real pilot.
+This repository is a dependency-free, local-only governance controller. Phase 1 established the fail-closed offline prototype; GOV-002 Phase 2 adds human-assisted, data-only role handoffs and trusted Git operations that are enabled only for disposable fixture repositories. The bounded offline autopilot can automatically run deterministic fixture roles in a disposable repository, but it does not launch Codex or another model, contact providers, publish Git changes, send notifications, schedule work, or activate the real pilot.
+
+## Offline autopilot proof
+
+The human-started `autopilot-offline` command automatically follows actual
+controller state through Architect plan, confined Builder execution, executed
+validations, independent deterministic Analyst review, Architect final
+disposition, and a non-mutating integration-preparation record. `success` and
+`revision` scenarios are supported. Every reasoning artifact is labeled
+`OFFLINE_FIXTURE`; the transport has no filesystem, shell, integration, or
+network capability. The Builder runs under a dedicated macOS sandbox in an
+independent disposable Git repository and may write only its designated
+workspace.
+
+The command categorically refuses the production authority and protected AI
+Agent Radar target by constructing its own disposable state and target below
+the system temporary root. It records controller-owned execution transitions,
+timing, confinement, candidate, validation, result, and submission receipts.
+Any uncertain started execution requires reconciliation. An accepted run stops
+at `INTEGRATION_PREPARATION` with no production intent, ref update, push, or
+deployment. See [the operator guide](docs/operator-guide.md) and [Builder
+handoff](docs/offline-autopilot-builder-handoff.md).
 
 ## Phase 2 Revision 1
 

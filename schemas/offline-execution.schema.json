@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "offline-execution.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "executionId", "taskId", "taskDigest", "cycleId", "role", "purpose", "iteration", "planRevision", "controller", "authorization", "adapterVersion", "adapterDigest", "executionPolicyDigest", "workspaceIdentity", "executableIdentity", "confinementEvidence", "monotonicStartedNs", "activeNs", "toolRequestDigest", "toolResultDigest", "candidateEvidence", "result", "resultDigest", "submissionReceipt", "receiptDigest", "status", "transitions"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "executionId": { "type": "string", "minLength": 1 },
+    "taskId": { "type": "string", "minLength": 1 },
+    "taskDigest": { "$ref": "definitions.schema.json#/$defs/digest" },
+    "cycleId": { "type": "string", "minLength": 1 },
+    "role": { "enum": ["architect", "builder", "analyst"] },
+    "purpose": { "enum": ["ARCHITECT_PLAN", "ARCHITECT_REVISION", "BUILDER_IMPLEMENTATION", "ANALYST_REVIEW", "ARCHITECT_FINAL_DECISION"] },
+    "iteration": { "type": "integer", "minimum": 1, "maximum": 3 },
+    "planRevision": { "type": "integer", "minimum": 1 },
+    "controller": { "type": "object" },
+    "authorization": { "type": "object" },
+    "adapterVersion": { "type": "string", "minLength": 1 },
+    "adapterDigest": { "$ref": "definitions.schema.json#/$defs/digest" },
+    "executionPolicyDigest": { "$ref": "definitions.schema.json#/$defs/digest" },
+    "workspaceIdentity": { "type": ["object", "null"] },
+    "executableIdentity": { "type": ["object", "null"] },
+    "confinementEvidence": { "type": ["object", "null"] },
+    "monotonicStartedNs": { "type": "string", "pattern": "^[0-9]+$" },
+    "activeNs": { "type": ["string", "null"], "pattern": "^[0-9]+$" },
+    "toolRequestDigest": { "type": ["string", "null"], "pattern": "^[0-9a-f]{64}$" },
+    "toolResultDigest": { "type": ["string", "null"], "pattern": "^[0-9a-f]{64}$" },
+    "candidateEvidence": { "type": ["object", "null"] },
+    "result": { "type": ["object", "null"] },
+    "resultDigest": { "type": ["string", "null"], "pattern": "^[0-9a-f]{64}$" },
+    "submissionReceipt": { "type": ["object", "null"] },
+    "receiptDigest": { "type": ["string", "null"], "pattern": "^[0-9a-f]{64}$" },
+    "status": { "enum": ["PREPARING", "CONFINEMENT_VERIFIED", "EXECUTING", "RESULT_CAPTURED", "EXECUTION_FINISHED", "SUBMITTED", "ABORTED", "RECONCILIATION_REQUIRED"] },
+    "transitions": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["status", "at"],
+        "properties": {
+          "status": { "enum": ["PREPARING", "CONFINEMENT_VERIFIED", "EXECUTING", "RESULT_CAPTURED", "EXECUTION_FINISHED", "SUBMITTED", "ABORTED", "RECONCILIATION_REQUIRED"] },
+          "at": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "timing": { "type": "object" },
+    "failure": { "type": "string" }
+  }
+}

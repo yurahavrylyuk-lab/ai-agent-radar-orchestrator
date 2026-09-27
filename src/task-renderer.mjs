@@ -37,7 +37,7 @@ export function createRoleTask(input) {
       scheduling: false,
     },
     createdAt: input.createdAt,
-    templateVersion: input.evidenceMode === "HUMAN_ASSISTED" ? "gov-002-activation-r1" : "gov-002-phase2-r3",
+    templateVersion: input.evidenceMode === "HUMAN_ASSISTED" ? "gov-002-activation-r1" : input.evidenceMode === "OFFLINE_FIXTURE" ? "gov-002-offline-autopilot-r1" : "gov-002-phase2-r3",
   };
   task.taskDigest = sha256Canonical(task);
   validateRoleTask(task);

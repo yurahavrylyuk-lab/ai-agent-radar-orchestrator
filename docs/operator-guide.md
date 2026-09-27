@@ -19,6 +19,38 @@ Use Node.js 24 at `/usr/local/bin/node`. All controller state, fixture repositor
 /usr/local/bin/node src/cli.mjs migrate-state --state .runtime/controller/state.json --file .runtime/controller/migration.json
 ```
 
+## Human-started offline autopilot
+
+The bounded offline proof uses no real authority, provider, model, network, or
+protected target. It accepts no caller-supplied state, authority, or target
+path. The runtime must be a new directory below `/private/tmp`:
+
+```sh
+/usr/local/bin/node src/cli.mjs autopilot-offline \
+  --runtime /private/tmp/ai-radar-offline-proof \
+  --scenario success
+```
+
+`--scenario revision` produces a real validation failure in iteration one and
+then follows controller-generated state through a corrected second iteration.
+Both scenarios end at `INTEGRATION_PREPARATION`; they never create a production
+integration intent or update the protected target.
+
+The command launches only the deterministic `OfflineFixtureTransport`. Its
+Builder tool request is executed in an independent Git repository by a child
+under a dedicated `sandbox-exec` profile. Do not wrap this command in another
+`sandbox-exec`: macOS rejects nested sandbox application. The mandatory test
+wrapper therefore generates actual Builder integration evidence before it
+launches the ordinary TAP suite under its separate inbound/outbound network
+denial profile. The Builder evidence itself proves direct and descendant
+authority read/write denial, controller/target write denial, network denial,
+and designated-workspace write access.
+
+An incomplete execution journal is inspected on restart. Only a record that
+never started execution may be aborted and retried automatically. Builder,
+captured-result, persistence-uncertain, orphan, or workspace uncertainty enters
+`RECONCILIATION_REQUIRED` and is not silently reset.
+
 `next-task` renders the already-persisted task, a complete expected result envelope, exact execution context, and digest-bound actionable evidence. It does not create a task, launch Codex, or contact a provider. Copy the rendered handoff to the named human-operated role and submit the returned data-only JSON without rewriting its controller-owned identity fields.
 
 Builder and Analyst roles must first use `prepare-workspace` for the exact pending task. Start and finish every role with the corresponding timing commands. Ordinary completion is rejected without a completed timing record, after more than 15 active minutes for one role, after more than 90 cumulative active minutes for the cycle, or while a hold is active. Human waiting is not active execution time. A timing violation may be closed only through the explicitly permitted `BLOCKED` disposition.
