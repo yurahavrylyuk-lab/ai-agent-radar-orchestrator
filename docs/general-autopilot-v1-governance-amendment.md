@@ -136,9 +136,9 @@ non-integration properties.
 
 ## Required independent Analyst handoff
 
-Review the exact candidate commit whose parent is
-\`dcf2aa2c22876adfc49a356b6a0bcd25c73c3f10\`. Review only this amendment and
-its diff. Confirm that it:
+Review the exact candidate range from
+\`dcf2aa2c22876adfc49a356b6a0bcd25c73c3f10\` through the Builder-supplied
+checkpoint. Review only this amendment and its diff. Confirm that it:
 
 1. remains non-effective pending explicit Trusted Human approval;
 2. authorizes only the stated human-initiated, fixed-target capability;
