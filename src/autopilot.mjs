@@ -8,6 +8,7 @@ import { controllerReleaseIdentity, executeBoundRole, initializeExecutionJournal
 import { OfflineFixtureTransport, OFFLINE_FIXTURE_ADAPTER_VERSION, OFFLINE_FIXTURE_DIGEST, OFFLINE_FIXTURE_SCENARIOS } from "./adapters/offline-fixture.mjs";
 import { enqueueRequest, initializeController, isRealTarget, preparePendingWorkspace } from "./coordinator.mjs";
 import { git } from "./git-evidence.mjs";
+import { AI_RADAR_SEARCH10_BRANCH, AI_RADAR_SEARCH10_REPOSITORY_PREFIX, AI_RADAR_SEARCH10_SCENARIO, aiRadarSearch10Approval, validateAiRadarSearch10Source } from "./scenarios/ai-radar-search10.mjs";
 
 export const OFFLINE_EXECUTION_POLICY = Object.freeze({ version: "offline-autopilot-policy-v1", evidenceMode: "OFFLINE_FIXTURE", network: false, providers: false, publication: false, deployment: false, scheduling: false, paidExecution: false, maxRoleExecutionSeconds: 900, maxCycleExecutionSeconds: 5400, maxIterations: 3, stopAt: "READY_FOR_INTEGRATION", resume: false });
 export const OFFLINE_EXECUTION_POLICY_DIGEST = sha256Canonical(OFFLINE_EXECUTION_POLICY);
@@ -56,23 +57,32 @@ function createTarget(guard, root, now) {
 function approval(runId) {
   return { approvalId: `offline-authorization:${runId}`, scope: "Add only the fictional offline educational fixture-reading guide in the disposable target.", allowedChanges: [{ path: PHASE2.pilotPath, operation: "ADD" }], forbiddenChanges: ["No production target", "No network", "No providers", "No publication", "No deployment", "No scheduling", "No paid execution", "No governance or operational instructions"], acceptanceCriteria: [{ id: "offline-educational-guide", description: "The disposable candidate contains one fictional offline educational guide." }], validationRequirements: [{ id: "validate-exact-add-scope", description: "Verify the actual candidate is exactly one regular non-executable ADD at the approved path." }, { id: "validate-fictional-offline-content", description: "Verify the exact reviewed fictional offline educational fixture template." }, { id: "validate-prohibited-content-absence", description: "Verify prohibited provider, secret, production, operational, deployment, and billing content is absent." }] };
 }
-function initializeFreshRun(guard, paths, scenario, controllerRoot, now) {
-  const runId = `offline-autopilot:${crypto.randomUUID()}`; progress(guard, paths, runId, "CREATED"); const baseline = createTarget(guard, paths.targetRoot, now); const authorization = approval(runId); const authorizationBinding = { authorizationId: authorization.approvalId, authorizationDigest: sha256Canonical(authorization), disposable: true };
-  assertOfflineRuntimeRootGuard(guard); initializeController(paths.statePath, { controllerId: "gov-002-offline-autopilot", repositoryId: `offline-repository:${runId}`, evidenceMode: "OFFLINE_FIXTURE", ownerId: `offline-owner:${runId}`, targetRoot: paths.targetRoot, approval: authorization });
+function initializeFreshRun(guard, paths, scenario, controllerRoot, now, sourceRoot) {
+  const runId = `offline-autopilot:${crypto.randomUUID()}`; progress(guard, paths, runId, "CREATED");
+  const search10 = scenario === AI_RADAR_SEARCH10_SCENARIO;
+  if (search10 && sourceRoot === null) throw new Error("AI_RADAR_SEARCH10_SOURCE_REQUIRED");
+  if (!search10 && sourceRoot !== null) throw new Error("OFFLINE_AUTOPILOT_SOURCE_NOT_ALLOWED");
+  const sourceIdentity = search10 ? validateAiRadarSearch10Source(sourceRoot) : null;
+  const targetRoot = search10 ? sourceIdentity.canonicalPath : paths.targetRoot;
+  const baseline = search10 ? sourceIdentity.commit : createTarget(guard, targetRoot, now);
+  const targetBranch = search10 ? AI_RADAR_SEARCH10_BRANCH : "self-improvement";
+  const repositoryId = search10 ? `${AI_RADAR_SEARCH10_REPOSITORY_PREFIX}${runId}` : `offline-repository:${runId}`;
+  const authorization = search10 ? aiRadarSearch10Approval(runId) : approval(runId); const authorizationBinding = { authorizationId: authorization.approvalId, authorizationDigest: sha256Canonical(authorization), disposable: true };
+  assertOfflineRuntimeRootGuard(guard); initializeController(paths.statePath, { controllerId: "gov-002-offline-autopilot", repositoryId, evidenceMode: "OFFLINE_FIXTURE", ownerId: `offline-owner:${runId}`, targetRoot, approval: authorization });
   const controller = controllerReleaseIdentity(controllerRoot); assertOfflineRuntimeRootGuard(guard); initializeExecutionJournal(paths.journalPath, { runId, scenario, controller, authorization: authorizationBinding, executionPolicyDigest: OFFLINE_EXECUTION_POLICY_DIGEST, adapterVersion: OFFLINE_FIXTURE_ADAPTER_VERSION, adapterDigest: OFFLINE_FIXTURE_DIGEST, createdAt: now });
-  assertOfflineRuntimeRootGuard(guard); enqueueRequest({ statePath: paths.statePath, ownerId: `offline-owner:${runId}`, ownerGeneration: 1, request: { schemaVersion: 2, requestId: runId, repositoryId: `offline-repository:${runId}`, targetRoot: paths.targetRoot, targetBranch: "self-improvement", baselineCommit: baseline, createdAt: now }, now });
-  return Object.freeze({ runId, scenario, controller, authorization: authorizationBinding, baseline, ...paths });
+  assertOfflineRuntimeRootGuard(guard); enqueueRequest({ statePath: paths.statePath, ownerId: `offline-owner:${runId}`, ownerGeneration: 1, request: { schemaVersion: 2, requestId: runId, repositoryId, targetRoot, targetBranch, baselineCommit: baseline, createdAt: now }, now });
+  return Object.freeze({ ...paths, runId, scenario, controller, authorization: authorizationBinding, baseline, targetRoot, targetBranch, sourceIdentity });
 }
 function phaseFor(task) { if (["ARCHITECT_PLAN", "ARCHITECT_REVISION"].includes(task.purpose)) return "ARCHITECT"; if (task.purpose === "BUILDER_IMPLEMENTATION") return "BUILDER"; if (task.purpose === "ANALYST_REVIEW") return "ANALYST"; if (task.purpose === "ARCHITECT_FINAL_DECISION") return "ARCHITECT_FINAL"; throw new Error("OFFLINE_AUTOPILOT_TASK_INVALID"); }
 function finalSummary(run, cycle, executions) {
-  const unsigned = { schemaVersion: 1, status: "READY_FOR_INTEGRATION", evidenceMode: "OFFLINE_FIXTURE", runId: run.runId, cycleId: cycle.id, scenario: run.scenario, baselineCommit: run.baseline, candidateCommit: cycle.candidateCommit, iteration: cycle.iteration, architectDecision: cycle.architectDecision, executionReceiptDigests: executions.map((item) => item.receiptDigest), productionIntegrationIntentCreated: false, targetMutationPerformed: false, providerCalls: 0, networkCalls: 0, createdAt: new Date().toISOString() };
+  const unsigned = { schemaVersion: 1, status: "READY_FOR_INTEGRATION", evidenceMode: "OFFLINE_FIXTURE", runId: run.runId, cycleId: cycle.id, scenario: run.scenario, baselineCommit: run.baseline, candidateCommit: cycle.candidateCommit, iteration: cycle.iteration, architectDecision: cycle.architectDecision, ...(run.sourceIdentity === null ? {} : { sourceIdentity: run.sourceIdentity }), executionReceiptDigests: executions.map((item) => item.receiptDigest), productionIntegrationIntentCreated: false, targetMutationPerformed: false, providerCalls: 0, networkCalls: 0, createdAt: new Date().toISOString() };
   return Object.freeze({ ...unsigned, summaryDigest: sha256Canonical(unsigned) });
 }
 
-function runCore({ runtimeRoot, scenario, controllerRoot, expectedControllerCommit, allowedRuntimeParent, executionControl, transportOverrides, inject }) {
+function runCore({ runtimeRoot, scenario, sourceRoot, controllerRoot, expectedControllerCommit, allowedRuntimeParent, executionControl, transportOverrides, inject }) {
   if (!OFFLINE_FIXTURE_SCENARIOS.includes(scenario)) throw new Error("OFFLINE_SCENARIO_UNSUPPORTED"); const guard = createOfflineRuntimeRootGuard(runtimeRoot, { allowedParent: allowedRuntimeParent }); const paths = derivedPaths(guard.root); let run = null;
   try {
-    const now = executionControl?.clock?.wallNow?.() ?? new Date().toISOString(); run = initializeFreshRun(guard, paths, scenario, controllerRoot, now);
+    const now = executionControl?.clock?.wallNow?.() ?? new Date().toISOString(); run = initializeFreshRun(guard, paths, scenario, controllerRoot, now, sourceRoot);
     const currentController = controllerReleaseIdentity(controllerRoot); if (currentController.commit !== run.controller.commit || currentController.tree !== run.controller.tree || (expectedControllerCommit !== null && currentController.commit !== expectedControllerCommit)) throw new Error("OFFLINE_CONTROLLER_RELEASE_STALE");
     const transport = new OfflineFixtureTransport({ scenario, overrides: transportOverrides }); let completedRoles = 0;
     while (true) {
@@ -95,5 +105,5 @@ function runCore({ runtimeRoot, scenario, controllerRoot, expectedControllerComm
   }
 }
 
-export function runOfflineAutopilot({ runtimeRoot, scenario = "success", controllerRoot = process.cwd(), expectedControllerCommit = null }) { return runCore({ runtimeRoot, scenario, controllerRoot, expectedControllerCommit, allowedRuntimeParent: null, executionControl: null, transportOverrides: {}, inject: null }); }
-export function runOfflineAutopilotForTest({ runtimeRoot, scenario = "success", controllerRoot = process.cwd(), expectedControllerCommit = null, allowedRuntimeParent = null, executionControl = null, transportOverrides = {}, inject = null }) { return runCore({ runtimeRoot, scenario, controllerRoot, expectedControllerCommit, allowedRuntimeParent, executionControl, transportOverrides, inject }); }
+export function runOfflineAutopilot({ runtimeRoot, scenario = "success", sourceRoot = null, controllerRoot = process.cwd(), expectedControllerCommit = null }) { return runCore({ runtimeRoot, scenario, sourceRoot, controllerRoot, expectedControllerCommit, allowedRuntimeParent: null, executionControl: null, transportOverrides: {}, inject: null }); }
+export function runOfflineAutopilotForTest({ runtimeRoot, scenario = "success", sourceRoot = null, controllerRoot = process.cwd(), expectedControllerCommit = null, allowedRuntimeParent = null, executionControl = null, transportOverrides = {}, inject = null }) { return runCore({ runtimeRoot, scenario, sourceRoot, controllerRoot, expectedControllerCommit, allowedRuntimeParent, executionControl, transportOverrides, inject }); }

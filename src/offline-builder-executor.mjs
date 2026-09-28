@@ -4,6 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { createExecutionFrame, decodeExecutionFrame, encodeExecutionFrame, EXECUTOR_EVENT_TYPES } from "./role-execution-protocol.mjs";
+import { applyAiRadarSearch10 } from "./scenarios/ai-radar-search10.mjs";
 
 const PILOT_PATH = "docs/learning/offline-fixture-reading.md";
 
@@ -41,19 +42,25 @@ function main() {
   const bytes = fs.readFileSync(0); const request = decodeExecutionFrame(bytes, { allowedTypes: EXECUTOR_EVENT_TYPES, expectedSequence: 0 }); activeRequest = request;
   if (request.type !== "tool_request") throw new Error("EXECUTOR_TOOL_REQUEST_REQUIRED");
   const payload = request.payload; const keys = Object.keys(payload).sort().join("\0");
-  if (keys !== ["content", "expectedOperation", "operation", "path"].sort().join("\0") || payload.operation !== "write_fixture" || payload.path !== PILOT_PATH || !["ADD", "MODIFY"].includes(payload.expectedOperation) || typeof payload.content !== "string") throw new Error("EXECUTOR_TOOL_REQUEST_INVALID");
+  const fixtureRequest = keys === ["content", "expectedOperation", "operation", "path"].sort().join("\0") && payload.operation === "write_fixture" && payload.path === PILOT_PATH && ["ADD", "MODIFY"].includes(payload.expectedOperation) && typeof payload.content === "string";
+  const search10Request = keys === ["operation", "scenario"].sort().join("\0") && payload.operation === "apply_ai_radar_search10" && payload.scenario === "ai-radar-search10";
+  if (!fixtureRequest && !search10Request) throw new Error("EXECUTOR_TOOL_REQUEST_INVALID");
   const workspaceRoot = fs.realpathSync(process.env.OFFLINE_WORKSPACE_ROOT); const roots = { authorityRoot: process.env.OFFLINE_AUTHORITY_ROOT, controllerRoot: process.env.OFFLINE_CONTROLLER_ROOT, targetRoot: process.env.OFFLINE_TARGET_ROOT, workspaceRoot };
   const before = { workspaceRoot: identity(workspaceRoot) };
   const confinement = confinementEvidence(roots);
   const testDelayMs = Number(process.env.OFFLINE_TEST_DELAY_MS ?? "0");
   if (!Number.isSafeInteger(testDelayMs) || testDelayMs < 0 || testDelayMs > 10_000) throw new Error("EXECUTOR_TEST_DELAY_INVALID");
   if (testDelayMs > 0) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, testDelayMs);
-  const file = path.join(workspaceRoot, PILOT_PATH); const existed = fs.existsSync(file);
-  if ((payload.expectedOperation === "ADD") === existed) throw new Error("EXECUTOR_OPERATION_MISMATCH");
-  fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 }); fs.writeFileSync(file, payload.content, { encoding: "utf8", mode: 0o644 }); fs.chmodSync(file, 0o644);
+  let toolResult;
+  if (fixtureRequest) {
+    const file = path.join(workspaceRoot, PILOT_PATH); const existed = fs.existsSync(file);
+    if ((payload.expectedOperation === "ADD") === existed) throw new Error("EXECUTOR_OPERATION_MISMATCH");
+    fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 }); fs.writeFileSync(file, payload.content, { encoding: "utf8", mode: 0o644 }); fs.chmodSync(file, 0o644);
+    const stat = fs.lstatSync(file); toolResult = { operation: payload.operation, path: PILOT_PATH, sha256: crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex"), mode: (stat.mode & 0o777).toString(8).padStart(4, "0") };
+  } else toolResult = applyAiRadarSearch10(workspaceRoot);
   const after = { workspaceRoot: identity(workspaceRoot) };
   for (const name of Object.keys(before)) if (JSON.stringify(before[name]) !== JSON.stringify(after[name])) throw new Error(`EXECUTOR_ROOT_IDENTITY_DRIFT:${name}`);
-  const stat = fs.lstatSync(file); const result = createExecutionFrame({ executionId: request.executionId, taskDigest: request.taskDigest, sequence: 1, type: "tool_result", allowedTypes: EXECUTOR_EVENT_TYPES, payload: { operation: payload.operation, path: PILOT_PATH, sha256: crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex"), mode: (stat.mode & 0o777).toString(8).padStart(4, "0"), workspaceIdentity: before.workspaceRoot, executableIdentity: executableIdentity(), confinement } });
+  const result = createExecutionFrame({ executionId: request.executionId, taskDigest: request.taskDigest, sequence: 1, type: "tool_result", allowedTypes: EXECUTOR_EVENT_TYPES, payload: { ...toolResult, workspaceIdentity: before.workspaceRoot, executableIdentity: executableIdentity(), confinement } });
   process.stdout.write(encodeExecutionFrame(result, { allowedTypes: EXECUTOR_EVENT_TYPES }));
 }
 

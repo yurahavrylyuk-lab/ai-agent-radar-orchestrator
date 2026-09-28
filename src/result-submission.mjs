@@ -16,6 +16,10 @@ function issue(state, cycle, purpose, now, binding = {}) {
   const task = buildTask(state, cycle, purpose, now, binding); state.tasks.push(task); state.pendingTaskId = task.taskId; cycle.stage = purpose; cycle.status = "AWAITING_HUMAN_ROLE"; return task;
 }
 function workspaceId(cycle, role) { return `${role}-${sha256Canonical({ cycleId: cycle.id, iteration: cycle.iteration, planRevision: cycle.planRevision, role }).slice(0, 20)}`; }
+function expectedBuilderChanges(task, cycle) {
+  if (task.repositoryId.startsWith("offline-repository:ai-radar-search10:")) return task.authorization.allowedChanges.map((item) => ({ ...item, mode: "100644" }));
+  return [{ path: "docs/learning/offline-fixture-reading.md", operation: cycle.iteration === 1 ? "ADD" : "MODIFY", mode: "100644" }];
+}
 function addReviewBundle(state, cycle, task, result, resultDigest, now) {
   const review = { id: `review:${task.taskId}`, cycleId: cycle.id, iteration: task.iteration, planRevision: task.planRevision, reviewedCommit: result.payload.reviewedCommit, reviewState: result.payload.reviewState, resultDigest, createdAt: now };
   state.reviews.push(review);
@@ -49,7 +53,7 @@ export function submitRoleResult({ statePath, ownerId, ownerGeneration, result, 
         issue(state, cycle, "BUILDER_IMPLEMENTATION", now, { workspaceId: workspaceId(cycle, "builder") }); break; }
       case "BUILDER_IMPLEMENTATION": { const checkpoint = state.checkpointReceipts.find((item) => item.taskId === task.taskId); if (!checkpoint) throw new Error("VERIFIED_CHECKPOINT_REQUIRED");
         if (checkpoint.candidateCommit !== result.payload.candidateCommit || checkpoint.parentCommit !== result.payload.parentCommit || checkpoint.treeId !== result.payload.treeId) throw new Error("BUILDER_RESULT_CHECKPOINT_MISMATCH");
-        const expectedOperation = cycle.iteration === 1 ? "ADD" : "MODIFY"; if (result.payload.changedFiles.length !== 1 || result.payload.changedFiles[0].path !== "docs/learning/offline-fixture-reading.md" || result.payload.changedFiles[0].operation !== expectedOperation || result.payload.changedFiles[0].mode !== "100644") throw new Error("BUILDER_RESULT_SCOPE_MISMATCH");
+        if (!same(result.payload.changedFiles, expectedBuilderChanges(task, cycle))) throw new Error("BUILDER_RESULT_SCOPE_MISMATCH");
         cycle.candidateCommit = checkpoint.candidateCommit; cycle.expectedTargetTip = cycle.baselineCommit;
         state.iterations.push({ id: `iteration:${cycle.id}:${cycle.iteration}`, cycleId: cycle.id, index: cycle.iteration, planRevision: cycle.planRevision, candidateCommit: checkpoint.candidateCommit, checkpointReceiptId: checkpoint.receiptId, reviewResultDigest: null });
         issue(state, cycle, "ANALYST_REVIEW", now, { candidateCommit: checkpoint.candidateCommit, reviewedCommit: checkpoint.candidateCommit, workspaceId: workspaceId(cycle, "analyst") }); break; }

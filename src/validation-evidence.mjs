@@ -3,6 +3,7 @@ import { canonicalJson, sha256Canonical } from "./contracts.mjs";
 import { changedFiles, commitMetadata, inspectGit } from "./git-evidence.mjs";
 import { OFFLINE_FIXTURE_TEMPLATE_VERSION, validateOfflineFixtureTemplate } from "./offline-fixture-content.mjs";
 import { resolveRegisteredWorkspace } from "./workspaces.mjs";
+import { inspectAiRadarSearch10Candidate, isAiRadarSearch10RepositoryId } from "./scenarios/ai-radar-search10.mjs";
 
 const VALIDATED_PURPOSES = new Set(["BUILDER_IMPLEMENTATION", "ANALYST_REVIEW"]);
 const ATTESTED_OUTCOMES = new Set(["PASS", "FAIL"]);
@@ -140,12 +141,16 @@ export function inspectOfflineCandidate(root, baselineCommit, candidateCommit) {
 export function executedValidationEntries(state, task, executionId) {
   if (state.evidenceMode !== "OFFLINE_FIXTURE" || task.evidenceMode !== "OFFLINE_FIXTURE") throw new Error("EXECUTED_VALIDATION_MODE_REQUIRED");
   const checkpoint = checkpointFor(state, task); if (!checkpoint) throw new Error("VALIDATION_EVIDENCE_NOT_READY");
-  const root = validationWorkspace(state, task); const candidate = inspectOfflineCandidate(root, state.cycles.find((item) => item.id === task.cycleId).baselineCommit, checkpoint.candidateCommit);
+  const root = validationWorkspace(state, task); const baselineCommit = state.cycles.find((item) => item.id === task.cycleId).baselineCommit;
+  const search10 = isAiRadarSearch10RepositoryId(state.repositoryId);
+  const candidate = search10 ? inspectAiRadarSearch10Candidate(root, baselineCommit, checkpoint.candidateCommit) : inspectOfflineCandidate(root, baselineCommit, checkpoint.candidateCommit);
   if (candidate.metadata.tree !== checkpoint.treeId) throw new Error("VALIDATION_CANDIDATE_TREE_MISMATCH");
   const identity = checkpointIdentityEvidence(state, task); const checkpointIdentityDigest = sha256Canonical(identity);
   return task.authorization.validationRequirements.map((recipe) => {
-    if (!(recipe.id in candidate.outcomes)) throw new Error(`UNKNOWN_EXECUTED_VALIDATION_RECIPE:${recipe.id}`); const passed = candidate.outcomes[recipe.id]; const detailsDigest = sha256Canonical({ recipeId: recipe.id, cumulative: candidate.cumulative, blobObjectId: candidate.blob.objectId, blobDigest: candidate.blob.digest, mode: candidate.blob.mode, templateVersion: candidate.templateVersion, passed });
-    const evidence = { schemaVersion: 4, evidenceType: "CONTROLLER_EXECUTED_VALIDATION", provenance: "CONTROLLER_EXECUTED", repositoryId: state.repositoryId, evidenceMode: "OFFLINE_FIXTURE", cycleId: task.cycleId, taskId: task.taskId, role: task.role, recipeId: recipe.id, baselineCommit: task.binding.baselineCommit, candidateCommit: checkpoint.candidateCommit, treeId: checkpoint.treeId, blobObjectId: candidate.blob.objectId, blobDigest: candidate.blob.digest, mode: candidate.blob.mode, recipeVersion: EXECUTED_RECIPE_VERSION, executionId, outcome: passed ? "PASS" : "FAIL", checkpointIdentityDigest, detailsDigest };
+    if (!(recipe.id in candidate.outcomes)) throw new Error(`UNKNOWN_EXECUTED_VALIDATION_RECIPE:${recipe.id}`); const passed = candidate.outcomes[recipe.id];
+    const primary = search10 ? candidate.objects[0] : { objectId: candidate.blob.objectId, digest: candidate.blob.digest, mode: candidate.blob.mode };
+    const detailsDigest = search10 ? candidate.detailsDigest : sha256Canonical({ recipeId: recipe.id, cumulative: candidate.cumulative, blobObjectId: candidate.blob.objectId, blobDigest: candidate.blob.digest, mode: candidate.blob.mode, templateVersion: candidate.templateVersion, passed });
+    const evidence = { schemaVersion: 4, evidenceType: "CONTROLLER_EXECUTED_VALIDATION", provenance: "CONTROLLER_EXECUTED", repositoryId: state.repositoryId, evidenceMode: "OFFLINE_FIXTURE", cycleId: task.cycleId, taskId: task.taskId, role: task.role, recipeId: recipe.id, baselineCommit: task.binding.baselineCommit, candidateCommit: checkpoint.candidateCommit, treeId: checkpoint.treeId, blobObjectId: primary.objectId, blobDigest: primary.sha256 ?? primary.digest, mode: primary.mode, recipeVersion: search10 ? "ai-radar-search10-validation-r1" : EXECUTED_RECIPE_VERSION, executionId, outcome: passed ? "PASS" : "FAIL", checkpointIdentityDigest, detailsDigest, ...(search10 ? { candidateObjects: candidate.objects, repositoryChecks: candidate.checks } : {}) };
     return { recipeId: recipe.id, outcome: evidence.outcome, evidence, evidenceDigest: sha256Canonical(evidence), skipReason: null };
   });
 }

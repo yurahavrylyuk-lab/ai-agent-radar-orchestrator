@@ -2,9 +2,10 @@ import { sha256Canonical } from "../contracts.mjs";
 import { OFFLINE_FIXTURE_DEFECT_CONTENT, OFFLINE_FIXTURE_GOOD_CONTENT } from "../offline-fixture-content.mjs";
 import { createExecutionFrame } from "../role-execution-protocol.mjs";
 import { resultContextForTask } from "../validate.mjs";
+import { AI_RADAR_SEARCH10_ALLOWED_CHANGES, AI_RADAR_SEARCH10_SCENARIO } from "../scenarios/ai-radar-search10.mjs";
 
 export const OFFLINE_FIXTURE_ADAPTER_VERSION = "offline-fixture-r1";
-export const OFFLINE_FIXTURE_SCENARIOS = Object.freeze(["success", "revision"]);
+export const OFFLINE_FIXTURE_SCENARIOS = Object.freeze(["success", "revision", AI_RADAR_SEARCH10_SCENARIO]);
 export const OFFLINE_FIXTURE_DIGEST = sha256Canonical({ version: OFFLINE_FIXTURE_ADAPTER_VERSION, scenarios: OFFLINE_FIXTURE_SCENARIOS });
 
 function result(task, payload) {
@@ -12,11 +13,12 @@ function result(task, payload) {
 }
 
 function plan(task) {
+  const search10 = task.repositoryId.startsWith("offline-repository:ai-radar-search10:");
   return result(task, {
-    goal: "Create one fictional offline educational fixture-reading guide.", scope: task.authorization.scope,
+    goal: search10 ? "Apply the exact reviewed ten-query AI Radar scenario in a disposable clone." : "Create one fictional offline educational fixture-reading guide.", scope: task.authorization.scope,
     allowedChanges: task.authorization.allowedChanges, forbiddenChanges: task.authorization.forbiddenChanges,
     acceptanceCriteria: task.authorization.acceptanceCriteria, validationRequirements: task.authorization.validationRequirements,
-    risks: ["Fixture wording could fail an explicit content validation."],
+    risks: [search10 ? "The fixed baseline or reviewed post-image may not match and must fail closed." : "Fixture wording could fail an explicit content validation."],
     rationale: "The plan remains exactly within the disposable authorization.",
     resolvesFindingIds: task.purpose === "ARCHITECT_REVISION" ? task.previousEvidence.records.filter((item) => item.type === "result").map((item) => item.id) : [],
   });
@@ -35,13 +37,15 @@ export class OfflineFixtureTransport {
     if (this.overrides.transportFailure === task.purpose) return frame("transport_failure", { code: "OFFLINE_FIXTURE_FAILURE", message: "Injected deterministic fixture failure." });
     if (task.purpose === "ARCHITECT_PLAN" || task.purpose === "ARCHITECT_REVISION") return frame("role_result", this.overrides.roleResult ?? plan(task));
     if (task.purpose === "BUILDER_IMPLEMENTATION" && !context.toolResult) {
+      if (this.scenario === AI_RADAR_SEARCH10_SCENARIO) return frame("tool_request", { operation: "apply_ai_radar_search10", scenario: AI_RADAR_SEARCH10_SCENARIO });
       const defective = this.scenario === "revision" && task.iteration === 1;
       const overridden = this.overrides.builderContents?.[task.iteration - 1] ?? this.overrides.builderContent;
       return frame("tool_request", { operation: "write_fixture", path: "docs/learning/offline-fixture-reading.md", content: overridden ?? (defective ? OFFLINE_FIXTURE_DEFECT_CONTENT : OFFLINE_FIXTURE_GOOD_CONTENT), expectedOperation: task.iteration === 1 ? "ADD" : "MODIFY" });
     }
     if (task.purpose === "BUILDER_IMPLEMENTATION") {
       const checkpoint = context.checkpoint; if (!checkpoint || !Array.isArray(context.validation)) return frame("transport_failure", { code: "BUILDER_EVIDENCE_MISSING", message: "Checkpoint or validation evidence is missing." });
-      return frame("role_result", result(task, { candidateCommit: checkpoint.candidateCommit, parentCommit: checkpoint.parentCommit, treeId: checkpoint.treeId, changedFiles: [{ path: "docs/learning/offline-fixture-reading.md", operation: task.iteration === 1 ? "ADD" : "MODIFY", mode: "100644" }], validation: context.validation, deviations: [], blockers: [] }), 1);
+      const changedFiles = this.scenario === AI_RADAR_SEARCH10_SCENARIO ? AI_RADAR_SEARCH10_ALLOWED_CHANGES.map((item) => ({ ...item, mode: "100644" })) : [{ path: "docs/learning/offline-fixture-reading.md", operation: task.iteration === 1 ? "ADD" : "MODIFY", mode: "100644" }];
+      return frame("role_result", result(task, { candidateCommit: checkpoint.candidateCommit, parentCommit: checkpoint.parentCommit, treeId: checkpoint.treeId, changedFiles, validation: context.validation, deviations: [], blockers: [] }), 1);
     }
     if (task.purpose === "ANALYST_REVIEW") {
       const failed = context.validation.filter((item) => item.outcome === "FAIL"); const reviewState = failed.length === 0 ? "PASS" : "REVISE";

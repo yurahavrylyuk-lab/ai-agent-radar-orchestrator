@@ -5,6 +5,7 @@ import { initializeStateV2, mutateStateV2, readState } from "./local-store.mjs";
 import { createRoleTask, emptyEvidence } from "./task-renderer.mjs";
 import { validateAuthorization, validateMachineStateV2, validateStateByVersion } from "./validate.mjs";
 import { createIndependentWorkspace } from "./workspaces.mjs";
+import { AI_RADAR_SEARCH10_BRANCH, isAiRadarSearch10RepositoryId } from "./scenarios/ai-radar-search10.mjs";
 
 export const REAL_TARGET_ROOT = "/Users/yuriy/Documents/IT Study/General/General/AI Agents/The AI Monitoring Agent";
 
@@ -58,7 +59,8 @@ export function buildTask(state, cycle, purpose, now, overrides = {}) {
 function validateEnqueueRequest(request) {
   const fields = ["schemaVersion", "requestId", "repositoryId", "targetRoot", "targetBranch", "baselineCommit", "createdAt"];
   if (!request || typeof request !== "object" || Array.isArray(request) || Object.keys(request).sort().join() !== fields.sort().join()) throw new TypeError("request fields are invalid");
-  if (request.schemaVersion !== 2 || typeof request.requestId !== "string" || request.repositoryId.length === 0 || request.targetBranch !== PHASE2.pilotBranch || !/^[0-9a-f]{40}$/u.test(request.baselineCommit) || !/^\d{4}-\d{2}-\d{2}T.*Z$/u.test(request.createdAt)) throw new TypeError("request is invalid");
+  const expectedBranch = isAiRadarSearch10RepositoryId(request.repositoryId) ? AI_RADAR_SEARCH10_BRANCH : PHASE2.pilotBranch;
+  if (request.schemaVersion !== 2 || typeof request.requestId !== "string" || request.repositoryId.length === 0 || request.targetBranch !== expectedBranch || !/^[0-9a-f]{40}$/u.test(request.baselineCommit) || !/^\d{4}-\d{2}-\d{2}T.*Z$/u.test(request.createdAt)) throw new TypeError("request is invalid");
   if (isRealTarget(request.targetRoot)) throw Object.assign(new Error("REAL_PILOT_NOT_AUTHORIZED"), { code: "REAL_PILOT_NOT_AUTHORIZED" });
 }
 

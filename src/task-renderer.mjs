@@ -53,7 +53,8 @@ function payloadTemplate(task, state) {
   };
   if (task.purpose === "BUILDER_IMPLEMENTATION") {
     const checkpoint = state?.checkpointReceipts.find((item) => item.taskId === task.taskId) ?? null;
-    return { candidateCommit: checkpoint?.candidateCommit ?? null, parentCommit: checkpoint?.parentCommit ?? null, treeId: checkpoint?.treeId ?? null, changedFiles: [{ path: PHASE2.pilotPath, operation: task.iteration === 1 ? "ADD" : "MODIFY", mode: "100644" }], validation, deviations: [], blockers: [] };
+    const changedFiles = task.repositoryId.startsWith("offline-repository:ai-radar-search10:") ? task.authorization.allowedChanges.map((item) => ({ ...item, mode: "100644" })) : [{ path: PHASE2.pilotPath, operation: task.iteration === 1 ? "ADD" : "MODIFY", mode: "100644" }];
+    return { candidateCommit: checkpoint?.candidateCommit ?? null, parentCommit: checkpoint?.parentCommit ?? null, treeId: checkpoint?.treeId ?? null, changedFiles, validation, deviations: [], blockers: [] };
   }
   if (task.purpose === "ANALYST_REVIEW") return { reviewedCommit: task.binding.reviewedCommit, reviewState: "<PASS|PASS_WITH_RECOMMENDATIONS|REVISE|REJECT|HUMAN_REVIEW_REQUIRED>", findings: [], requiredChanges: [], recommendations: [], validation };
   const analyst = state?.results.findLast((item) => item.cycleId === task.cycleId && item.purpose === "ANALYST_REVIEW") ?? null;
