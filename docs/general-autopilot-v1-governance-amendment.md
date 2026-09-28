@@ -165,4 +165,3 @@ acceptance may authorize a later, separately scoped General Instruction
 Autopilot v1 implementation task only. It does not authorize publication,
 real-pilot activation, authority provisioning, integration, merge, push,
 deployment, or any AI Agent Radar production change.
-
