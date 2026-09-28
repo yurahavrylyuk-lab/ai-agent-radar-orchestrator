@@ -1,65 +1,62 @@
-# Offline autopilot Builder handoff
+# Simple Offline Autopilot V1 Builder handoff
 
-## Scope and baseline
+## Scope
 
-This checkpoint implements the approved deterministic offline-autopilot design
-on parent `ed465d2e6b04d26eaeb382f13b4795f252da9edf`. It does not publish, issue or
-consume production authority, resume the historical pilot, or modify the
-protected AI Agent Radar target.
+The human-started `autopilot-offline` command runs the existing controller's
+Architect, Builder, validation, Analyst, and final Architect handoffs using
+deterministic offline fixtures. It stops at `READY_FOR_INTEGRATION`. It never
+integrates, contacts a provider, publishes, deploys, consumes production
+authority, resumes the historical pilot, or modifies the protected target.
 
-The public command is `autopilot-offline`. It creates a private disposable
-target, controller state, authorization binding, execution journal, role
-workspaces, and final integration-preparation record beneath a caller-selected
-`/private/tmp` directory. The only transport is `OfflineFixtureTransport`.
+## Fresh-run model
 
-## Trust boundaries
+Every run requires a new direct child of an approved system temporary root.
+The leaf is created non-recursively with mode `0700`; existing files,
+directories, and symlinks are rejected. Internal paths exist only in memory and
+are derived from the guarded root. There is no resume, repair, reconciliation,
+or durable timing reconstruction. On a handled error the runner records
+`FAILED` when possible, preserves the runtime for inspection, exits nonzero,
+and permanently refuses that runtime path.
 
-Transport frames are canonical, length-prefixed, versioned, digest-bound, and
-strictly sequenced. Fixture output is untrusted and passes existing role-result
-validation before submission. The transport receives no authority handle,
-host shell, unrestricted filesystem capability, provider, network, or
-integration callback.
+The simple progress projection is `CREATED`, `ARCHITECT`, `BUILDER`,
+`VALIDATING`, `ANALYST`, `ARCHITECT_FINAL`, then
+`READY_FOR_INTEGRATION`; errors project `FAILED`. The ordinary controller state
+and its validated role results remain authoritative.
 
-Builder operations run in an independent disposable Git repository. The child
-process uses the reviewed macOS sandbox policy and returns native
-`sandbox_check` evidence for itself and a descendant. The evidence must show
-authority read/write, controller write, target write, inbound network, and
-outbound network denied, while its designated workspace is writable. The child
-accepts one strict `write_fixture` request for the approved path only.
+## Builder and validation boundary
 
-The ordinary TAP suite still runs under the wrapper's OS-enforced inbound and
-outbound network denial. macOS does not permit a second `sandbox-exec` profile
-inside an already sandboxed process, so the wrapper creates real Builder
-integration evidence in a separate pre-suite phase. Those Builder children are
-themselves confined by the stricter filesystem-and-network profile, and the
-sandboxed TAP tests inspect the retained evidence. No unsandboxed Builder
-fallback exists.
+The Builder is a real child process under the reviewed macOS `sandbox-exec`
+profile. Before writing, it verifies direct and descendant denial for authority
+read/write, controller write, protected-target write, inbound network, and
+outbound network, plus allowed access to its disposable workspace. There is no
+fallback. A controller-owned deadline terminates the child before it can write
+when the deadline expires. `CONFINEMENT_VERIFIED` is recorded only after the
+child returns complete passing process evidence.
 
-## Evidence and lifecycle
+The controller creates a real Git checkpoint. All three validation recipes
+read the authorized file's mode and bytes from the exact candidate tree/blob,
+not from the mutable workspace. Evidence binds the baseline, candidate, tree,
+blob object ID, SHA-256, mode, reviewed template version, recipe version,
+execution ID, and outcome. The accepted content is the single reviewed
+deterministic offline-fixture template; unknown or prohibited content fails.
 
-Executed validation evidence binds the baseline and candidate commits, tree,
-fixture blob SHA-256, recipe version, execution ID, checkpoint identity, actual
-outcome, and details digest. Analyst `REVISE` is derived from a real failed
-content recipe in revision scenario iteration one; the corrected iteration two
-passes and reaches Architect `ACCEPT`.
+## Scenarios and evidence
 
-Execution records follow `PREPARING`, `CONFINEMENT_VERIFIED`, `EXECUTING`,
-`RESULT_CAPTURED`, `EXECUTION_FINISHED`, and `SUBMITTED`. Records may terminate
-as `ABORTED` only before execution begins. Started Builder, captured-result,
-durability-uncertain, orphan, or workspace uncertainty fails closed as
-`RECONCILIATION_REQUIRED`. Controller-owned monotonic and persisted role timing
-is retained; fixtures cannot supply timing.
+`success` reaches Architect `ACCEPT` in iteration one. `revision` commits a
+defective fixture in iteration one, derives Analyst `REVISE` from actual failed
+validation evidence, follows the controller-generated revision, commits the
+reviewed template in iteration two, and reaches `ACCEPT`. Both stop before any
+integration intent or target-ref update.
 
-## Verification and limitations
+The final Builder verification ran the complete OS-network-denied wrapper:
+183 TAP tests passed, zero failed, and 13 wrapper checks passed, zero failed.
+The wrapper separately exercised real Builder and descendant confinement in
+disposable repositories. Independent Analyst review must use the exact local
+checkpoint reported with this handoff.
 
-The mandatory wrapper runs the complete existing and expanded suite, public
-CLI success/revision demonstrations, crash/restart cases, strict protocol
-negative tests, validation evidence checks, and actual Builder/descendant
-confinement checks. The final pre-checkpoint run reported 180 TAP tests passed,
-zero failed, and 13 wrapper checks passed with zero failed. The local checkpoint
-identity is reported by the Builder after commit creation.
+## Limitations
 
-This proof does not qualify a model transport and cannot launch Claude, Codex,
-OpenAI, Anthropic, Gemini, or any other provider. It performs no real
-integration. A human must inspect the preparation record; publication and any
-future real-role transport remain separate governance decisions.
+V1 has no live model transport, crash resume, mid-role recovery, automatic
+integration, provider access, publication, deployment, scheduling, email, or
+spending configuration. An uncatchable process crash may leave incomplete
+state; that runtime remains dead by design.

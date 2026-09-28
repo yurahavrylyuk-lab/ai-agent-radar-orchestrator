@@ -24,9 +24,10 @@ async function main(argv) {
   const command = argv[0]; const statePath = path.resolve(option(argv, "--state", ".runtime/controller/state.json"));
   const now = option(argv, "--now", new Date().toISOString());
   if (command === "autopilot-offline") {
+    if (argv.includes("--now")) throw new Error("OFFLINE_AUTOPILOT_TIME_OVERRIDE_FORBIDDEN");
     if (argv.includes("--state") || argv.includes("--target") || argv.includes("--authority")) throw new Error("OFFLINE_AUTOPILOT_PROTECTED_OVERRIDE_FORBIDDEN");
     const runtimeRoot = option(argv, "--runtime"); if (!runtimeRoot) throw new Error("OFFLINE_AUTOPILOT_RUNTIME_REQUIRED");
-    print(runOfflineAutopilot({ runtimeRoot: path.resolve(runtimeRoot), scenario: option(argv, "--scenario", "success"), controllerRoot: process.cwd(), expectedControllerCommit: option(argv, "--controller-commit", null), now })); return;
+    print(runOfflineAutopilot({ runtimeRoot: path.resolve(runtimeRoot), scenario: option(argv, "--scenario", "success"), controllerRoot: process.cwd(), expectedControllerCommit: option(argv, "--controller-commit", null) })); return;
   }
   if (command === "rehearse") { const root = path.resolve(option(argv, "--runtime", `.runtime/rehearsal-${Date.now()}`)); print(await runRehearsal(root)); return; }
   if (command === "authorize-pilot") {

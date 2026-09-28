@@ -76,7 +76,8 @@ The sole automatic-role exception is the human-started `autopilot-offline`
 command. It uses only the deterministic `OfflineFixtureTransport`, disposable
 authority/state and an independent disposable Git repository below the system
 temporary root. Its Builder child runs under the reviewed macOS sandbox, and
-the run must stop at a non-mutating `INTEGRATION_PREPARATION` record. This
+the run must stop at a non-mutating `READY_FOR_INTEGRATION` summary. Existing
+or failed runtime directories are never resumed. This
 exception cannot consume production authority, target the AI Agent Radar
 repository, create a production integration intent, contact a provider, or
 authorize automatic real-role launch.

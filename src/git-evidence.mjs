@@ -39,12 +39,13 @@ export function git(root, args, { write = false, allowFailure = false, input = u
   return { status: result.status, stdout: result.stdout, stderr: result.stderr };
 }
 
-export function inspectGit(root, args, { allowFailure = false } = {}) {
+export function inspectGit(root, args, { allowFailure = false, input = undefined } = {}) {
   if (!Array.isArray(args) || args.some((arg) => typeof arg !== "string")) throw new TypeError("git arguments must be strings");
   const result = spawnSync(GIT, ["--no-optional-locks", "-c", "core.fsmonitor=false", "-c", "core.untrackedCache=false", "-C", root, ...args], {
     encoding: null,
     env: { ...sanitizedEnvironment(), ...SAFE_GIT_ENV, GIT_OPTIONAL_LOCKS: "0", GIT_NO_LAZY_FETCH: "1", LC_ALL: "C" },
-    stdio: ["ignore", "pipe", "pipe"],
+    input,
+    stdio: [input === undefined ? "ignore" : "pipe", "pipe", "pipe"],
   });
   if (result.error) throw result.error;
   if (result.status !== 0 && !allowFailure) {
@@ -72,7 +73,7 @@ export function alternates(root) {
   return fs.existsSync(location) ? fs.readFileSync(location, "utf8") : "";
 }
 export function changedFiles(root, from, to) {
-  const output = git(root, ["diff", "--raw", "-z", "--no-renames", from, to]).stdout;
+  const output = git(root, ["diff", "--raw", "--abbrev=40", "-z", "--no-renames", from, to]).stdout;
   const fields = output.split("\0").filter(Boolean); const changes = [];
   for (let index = 0; index < fields.length; index += 2) {
     const header = fields[index]; const file = fields[index + 1];

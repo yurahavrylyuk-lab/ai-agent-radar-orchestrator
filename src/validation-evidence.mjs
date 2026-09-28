@@ -1,8 +1,7 @@
 import crypto from "node:crypto";
-import fs from "node:fs";
-import path from "node:path";
 import { canonicalJson, sha256Canonical } from "./contracts.mjs";
-import { changedFiles, commitMetadata } from "./git-evidence.mjs";
+import { changedFiles, commitMetadata, inspectGit } from "./git-evidence.mjs";
+import { OFFLINE_FIXTURE_TEMPLATE_VERSION, validateOfflineFixtureTemplate } from "./offline-fixture-content.mjs";
 import { resolveRegisteredWorkspace } from "./workspaces.mjs";
 
 const VALIDATED_PURPOSES = new Set(["BUILDER_IMPLEMENTATION", "ANALYST_REVIEW"]);
@@ -101,7 +100,7 @@ function requiresAllPass(task, result) {
   return ["PASS", "PASS_WITH_RECOMMENDATIONS"].includes(result.payload.reviewState);
 }
 
-const EXECUTED_RECIPE_VERSION = "offline-validation-r1";
+const EXECUTED_RECIPE_VERSION = "offline-validation-r2";
 
 function validationWorkspace(state, task) {
   const direct = state.workspaces.find((item) => item.taskId === task.taskId);
@@ -110,27 +109,43 @@ function validationWorkspace(state, task) {
   return resolveRegisteredWorkspace(source, "builder");
 }
 
-function validateRecipe(recipeId, { cumulative, content, mode }) {
+export function candidateBlob(root, candidateCommit, expectedPath, expectedObject) {
+  const raw = inspectGit(root, ["ls-tree", "-z", candidateCommit, "--", expectedPath]).stdout;
+  const match = raw.toString("utf8").match(/^(\d{6}) (\S+) ([0-9a-f]{40})\t([^\0]+)\0$/u);
+  if (!match || match[4] !== expectedPath) throw new Error("VALIDATION_CANDIDATE_PATH_MISSING");
+  const [, mode, type, objectId] = match;
+  if (type !== "blob" || mode !== "100644") throw new Error("VALIDATION_CANDIDATE_FILE_TYPE_OR_MODE_INVALID");
+  if (objectId !== expectedObject) throw new Error("VALIDATION_CANDIDATE_OBJECT_MISMATCH");
+  const bytes = inspectGit(root, ["cat-file", "blob", objectId]).stdout;
+  const verifiedObject = inspectGit(root, ["hash-object", "--stdin"], { input: bytes }).stdout.toString("utf8").trim();
+  if (verifiedObject !== objectId) throw new Error("VALIDATION_CANDIDATE_OBJECT_LOOKUP_MISMATCH");
+  return { bytes, mode, objectId };
+}
+
+function validateRecipe(recipeId, { cumulative, content, mode, templateValid }) {
   if (recipeId === "validate-exact-add-scope") return cumulative.length === 1 && cumulative[0].path === "docs/learning/offline-fixture-reading.md" && cumulative[0].status === "A" && cumulative[0].oldMode === "000000" && cumulative[0].newMode === "100644" && mode === "100644";
-  if (recipeId === "validate-fictional-offline-content") {
-    const words = content.trim().split(/\s+/u).filter(Boolean).length;
-    return words <= 800 && /fictional/iu.test(content) && /offline/iu.test(content) && /educational/iu.test(content);
-  }
-  if (recipeId === "validate-prohibited-content-absence") return !/(?:api[_ -]?key|secret|credential|cloudflare|wrangler|resend|\bd1\b|billing|deploy(?:ment)?|production command)/iu.test(content);
+  if (recipeId === "validate-fictional-offline-content") return templateValid;
+  if (recipeId === "validate-prohibited-content-absence") return templateValid && !/(?:api[_ -]?key|secret|credential|provider|cloudflare|wrangler|resend|\bd1\b|billing|deploy(?:ment)?|production|operational\s+(?:command|instruction)|network\s+request)/iu.test(content);
   throw new Error(`UNKNOWN_EXECUTED_VALIDATION_RECIPE:${recipeId}`);
+}
+
+export function inspectOfflineCandidate(root, baselineCommit, candidateCommit) {
+  const metadata = commitMetadata(root, candidateCommit); const cumulative = changedFiles(root, baselineCommit, candidateCommit);
+  const expected = cumulative.find((item) => item.path === "docs/learning/offline-fixture-reading.md"); if (!expected) throw new Error("VALIDATION_CANDIDATE_PATH_MISSING");
+  const blob = candidateBlob(root, candidateCommit, expected.path, expected.newObject); const content = blob.bytes.toString("utf8"); const templateValid = validateOfflineFixtureTemplate(content); const blobDigest = crypto.createHash("sha256").update(blob.bytes).digest("hex");
+  const outcomes = Object.freeze({ "validate-exact-add-scope": validateRecipe("validate-exact-add-scope", { cumulative, content, mode: blob.mode, templateValid }), "validate-fictional-offline-content": validateRecipe("validate-fictional-offline-content", { cumulative, content, mode: blob.mode, templateValid }), "validate-prohibited-content-absence": validateRecipe("validate-prohibited-content-absence", { cumulative, content, mode: blob.mode, templateValid }) });
+  return Object.freeze({ metadata, cumulative, blob: Object.freeze({ objectId: blob.objectId, mode: blob.mode, digest: blobDigest, bytes: Buffer.from(blob.bytes) }), templateVersion: OFFLINE_FIXTURE_TEMPLATE_VERSION, outcomes });
 }
 
 export function executedValidationEntries(state, task, executionId) {
   if (state.evidenceMode !== "OFFLINE_FIXTURE" || task.evidenceMode !== "OFFLINE_FIXTURE") throw new Error("EXECUTED_VALIDATION_MODE_REQUIRED");
   const checkpoint = checkpointFor(state, task); if (!checkpoint) throw new Error("VALIDATION_EVIDENCE_NOT_READY");
-  const root = validationWorkspace(state, task); const metadata = commitMetadata(root, checkpoint.candidateCommit);
-  if (metadata.tree !== checkpoint.treeId) throw new Error("VALIDATION_CANDIDATE_TREE_MISMATCH");
-  const file = path.join(root, "docs/learning/offline-fixture-reading.md"); const bytes = fs.readFileSync(file); const content = bytes.toString("utf8"); const stat = fs.lstatSync(file);
-  const cumulative = changedFiles(root, state.cycles.find((item) => item.id === task.cycleId).baselineCommit, checkpoint.candidateCommit);
-  const identity = checkpointIdentityEvidence(state, task); const checkpointIdentityDigest = sha256Canonical(identity); const blobDigest = crypto.createHash("sha256").update(bytes).digest("hex"); const mode = (stat.mode & 0o111) === 0 ? "100644" : "100755";
+  const root = validationWorkspace(state, task); const candidate = inspectOfflineCandidate(root, state.cycles.find((item) => item.id === task.cycleId).baselineCommit, checkpoint.candidateCommit);
+  if (candidate.metadata.tree !== checkpoint.treeId) throw new Error("VALIDATION_CANDIDATE_TREE_MISMATCH");
+  const identity = checkpointIdentityEvidence(state, task); const checkpointIdentityDigest = sha256Canonical(identity);
   return task.authorization.validationRequirements.map((recipe) => {
-    const passed = validateRecipe(recipe.id, { cumulative, content, mode }); const detailsDigest = sha256Canonical({ recipeId: recipe.id, cumulative, blobDigest, mode, passed });
-    const evidence = { schemaVersion: 3, evidenceType: "CONTROLLER_EXECUTED_VALIDATION", provenance: "CONTROLLER_EXECUTED", repositoryId: state.repositoryId, evidenceMode: "OFFLINE_FIXTURE", cycleId: task.cycleId, taskId: task.taskId, role: task.role, recipeId: recipe.id, baselineCommit: task.binding.baselineCommit, candidateCommit: checkpoint.candidateCommit, treeId: checkpoint.treeId, blobDigest, recipeVersion: EXECUTED_RECIPE_VERSION, executionId, outcome: passed ? "PASS" : "FAIL", checkpointIdentityDigest, detailsDigest };
+    if (!(recipe.id in candidate.outcomes)) throw new Error(`UNKNOWN_EXECUTED_VALIDATION_RECIPE:${recipe.id}`); const passed = candidate.outcomes[recipe.id]; const detailsDigest = sha256Canonical({ recipeId: recipe.id, cumulative: candidate.cumulative, blobObjectId: candidate.blob.objectId, blobDigest: candidate.blob.digest, mode: candidate.blob.mode, templateVersion: candidate.templateVersion, passed });
+    const evidence = { schemaVersion: 4, evidenceType: "CONTROLLER_EXECUTED_VALIDATION", provenance: "CONTROLLER_EXECUTED", repositoryId: state.repositoryId, evidenceMode: "OFFLINE_FIXTURE", cycleId: task.cycleId, taskId: task.taskId, role: task.role, recipeId: recipe.id, baselineCommit: task.binding.baselineCommit, candidateCommit: checkpoint.candidateCommit, treeId: checkpoint.treeId, blobObjectId: candidate.blob.objectId, blobDigest: candidate.blob.digest, mode: candidate.blob.mode, recipeVersion: EXECUTED_RECIPE_VERSION, executionId, outcome: passed ? "PASS" : "FAIL", checkpointIdentityDigest, detailsDigest };
     return { recipeId: recipe.id, outcome: evidence.outcome, evidence, evidenceDigest: sha256Canonical(evidence), skipReason: null };
   });
 }

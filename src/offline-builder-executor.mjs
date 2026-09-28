@@ -45,6 +45,9 @@ function main() {
   const workspaceRoot = fs.realpathSync(process.env.OFFLINE_WORKSPACE_ROOT); const roots = { authorityRoot: process.env.OFFLINE_AUTHORITY_ROOT, controllerRoot: process.env.OFFLINE_CONTROLLER_ROOT, targetRoot: process.env.OFFLINE_TARGET_ROOT, workspaceRoot };
   const before = { workspaceRoot: identity(workspaceRoot) };
   const confinement = confinementEvidence(roots);
+  const testDelayMs = Number(process.env.OFFLINE_TEST_DELAY_MS ?? "0");
+  if (!Number.isSafeInteger(testDelayMs) || testDelayMs < 0 || testDelayMs > 10_000) throw new Error("EXECUTOR_TEST_DELAY_INVALID");
+  if (testDelayMs > 0) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, testDelayMs);
   const file = path.join(workspaceRoot, PILOT_PATH); const existed = fs.existsSync(file);
   if ((payload.expectedOperation === "ADD") === existed) throw new Error("EXECUTOR_OPERATION_MISMATCH");
   fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 }); fs.writeFileSync(file, payload.content, { encoding: "utf8", mode: 0o644 }); fs.chmodSync(file, 0o644);

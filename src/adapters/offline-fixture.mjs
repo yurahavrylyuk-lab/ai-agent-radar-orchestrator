@@ -1,13 +1,11 @@
 import { sha256Canonical } from "../contracts.mjs";
+import { OFFLINE_FIXTURE_DEFECT_CONTENT, OFFLINE_FIXTURE_GOOD_CONTENT } from "../offline-fixture-content.mjs";
 import { createExecutionFrame } from "../role-execution-protocol.mjs";
 import { resultContextForTask } from "../validate.mjs";
 
 export const OFFLINE_FIXTURE_ADAPTER_VERSION = "offline-fixture-r1";
 export const OFFLINE_FIXTURE_SCENARIOS = Object.freeze(["success", "revision"]);
 export const OFFLINE_FIXTURE_DIGEST = sha256Canonical({ version: OFFLINE_FIXTURE_ADAPTER_VERSION, scenarios: OFFLINE_FIXTURE_SCENARIOS });
-
-const GOOD_CONTENT = `# Reading a Fictional Offline Fixture\n\nThis fictional, offline lesson explains how to inspect a small sample record without contacting any service. Read the title, identify the fields, compare the expected and observed values, and write down what the evidence supports.\n\nThe exercise is educational: it teaches careful observation, explicit assumptions, and repeatable local checks. The example does not describe a real system or an operational procedure.\n`;
-const DEFECT_CONTENT = `# Reading a Fictional Offline Fixture\n\nThis fictional, offline example is intentionally incomplete. It asks the learner to observe a sample but omits the required teaching explanation.\n`;
 
 function result(task, payload) {
   return { schemaVersion: 2, taskDigest: task.taskDigest, context: resultContextForTask(task), outcome: "COMPLETED", payload };
@@ -38,7 +36,8 @@ export class OfflineFixtureTransport {
     if (task.purpose === "ARCHITECT_PLAN" || task.purpose === "ARCHITECT_REVISION") return frame("role_result", this.overrides.roleResult ?? plan(task));
     if (task.purpose === "BUILDER_IMPLEMENTATION" && !context.toolResult) {
       const defective = this.scenario === "revision" && task.iteration === 1;
-      return frame("tool_request", { operation: "write_fixture", path: "docs/learning/offline-fixture-reading.md", content: defective ? DEFECT_CONTENT : GOOD_CONTENT, expectedOperation: task.iteration === 1 ? "ADD" : "MODIFY" });
+      const overridden = this.overrides.builderContents?.[task.iteration - 1] ?? this.overrides.builderContent;
+      return frame("tool_request", { operation: "write_fixture", path: "docs/learning/offline-fixture-reading.md", content: overridden ?? (defective ? OFFLINE_FIXTURE_DEFECT_CONTENT : OFFLINE_FIXTURE_GOOD_CONTENT), expectedOperation: task.iteration === 1 ? "ADD" : "MODIFY" });
     }
     if (task.purpose === "BUILDER_IMPLEMENTATION") {
       const checkpoint = context.checkpoint; if (!checkpoint || !Array.isArray(context.validation)) return frame("transport_failure", { code: "BUILDER_EVIDENCE_MISSING", message: "Checkpoint or validation evidence is missing." });

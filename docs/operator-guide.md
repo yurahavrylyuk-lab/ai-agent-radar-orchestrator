@@ -33,7 +33,7 @@ path. The runtime must be a new directory below `/private/tmp`:
 
 `--scenario revision` produces a real validation failure in iteration one and
 then follows controller-generated state through a corrected second iteration.
-Both scenarios end at `INTEGRATION_PREPARATION`; they never create a production
+Both scenarios end at `READY_FOR_INTEGRATION`; they never create a production
 integration intent or update the protected target.
 
 The command launches only the deterministic `OfflineFixtureTransport`. Its
@@ -46,10 +46,11 @@ denial profile. The Builder evidence itself proves direct and descendant
 authority read/write denial, controller/target write denial, network denial,
 and designated-workspace write access.
 
-An incomplete execution journal is inspected on restart. Only a record that
-never started execution may be aborted and retried automatically. Builder,
-captured-result, persistence-uncertain, orphan, or workspace uncertainty enters
-`RECONCILIATION_REQUIRED` and is not silently reset.
+The runtime path must not exist before launch. Offline Autopilot V1 never opens,
+repairs, or resumes an existing runtime. A failed or interrupted runtime is
+retained for inspection and is permanently dead; another attempt requires a
+different fresh directory. `offline-status.json` is only a progress projection,
+while the ordinary controller state remains authoritative.
 
 `next-task` renders the already-persisted task, a complete expected result envelope, exact execution context, and digest-bound actionable evidence. It does not create a task, launch Codex, or contact a provider. Copy the rendered handoff to the named human-operated role and submit the returned data-only JSON without rewriting its controller-owned identity fields.
 
