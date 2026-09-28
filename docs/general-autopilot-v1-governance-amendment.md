@@ -140,7 +140,9 @@ Review the exact candidate range from
 \`dcf2aa2c22876adfc49a356b6a0bcd25c73c3f10\` through the Builder-supplied
 checkpoint. Review only this amendment and its diff. Confirm that it:
 
-1. remains non-effective pending explicit Trusted Human approval;
+1. records the explicit Trusted Human approval and remains non-effective until
+   independent Analyst review and Architect acceptance of the exact checkpoint
+   are complete;
 2. authorizes only the stated human-initiated, fixed-target capability;
 3. keeps the canonical protected checkout read-only and confines writes to an
    isolated task workspace and temporary branch;
