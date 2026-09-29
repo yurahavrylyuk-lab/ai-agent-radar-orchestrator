@@ -114,7 +114,7 @@ function prepareWorkspaceDependencies(sourceRoot, workspace) {
   if (destinationStat !== null || fs.lstatSync(path.dirname(destination)).isSymbolicLink()) fail("GENERAL_WORKSPACE_DEPENDENCIES_PRESENT");
   const sourceLock = lockfileDigest(sourceRoot); if (sourceLock !== lockfileDigest(workspace)) fail("GENERAL_DEPENDENCY_LOCKFILE_MISMATCH");
   const canonicalSource = verifyDependencyTree(sourceDependencies);
-  fs.cpSync(canonicalSource, destination, { recursive: true, dereference: true, errorOnExist: true, force: false, preserveTimestamps: false });
+  fs.cpSync(canonicalSource, destination, { recursive: true, dereference: false, verbatimSymlinks: true, errorOnExist: true, force: false, preserveTimestamps: false });
   const canonicalDestination = verifyDependencyTree(destination);
   return { source: canonicalSource, destination: canonicalDestination, lockfileDigest: sourceLock, digest: dependencyTreeDigest(canonicalDestination) };
 }

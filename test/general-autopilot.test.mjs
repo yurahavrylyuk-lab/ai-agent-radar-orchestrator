@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -8,7 +9,7 @@ import { ClaudeMessagesTransport, runGeneralAutopilotForTest } from "../src/gene
 import { git } from "../src/git-evidence.mjs";
 import { offlineExecutorSandboxProfile, PRODUCTION_AUTHORITY_ROOT, PRODUCTION_CONTROLLER_ROOT, PROTECTED_REAL_TARGET_ROOT } from "../src/operator-boundary.mjs";
 
-function fixture({ scripts = { build: "tsc", test: "node -e \"\"", "worker:typecheck": "tsc" } } = {}) {
+function fixture({ scripts = { build: "tsc", test: "node -e \"\"", "worker:typecheck": "tsc" }, dependencyLink = "relative" } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "general-autopilot-"));
   git(root, ["init", "-b", "main"], { write: true });
   fs.writeFileSync(path.join(root, "package.json"), JSON.stringify({ scripts }));
@@ -16,8 +17,22 @@ function fixture({ scripts = { build: "tsc", test: "node -e \"\"", "worker:typec
   fs.writeFileSync(path.join(root, ".gitignore"), "node_modules/\n");
   fs.writeFileSync(path.join(root, "README.md"), "fixture\n");
   git(root, ["add", "."], { write: true }); git(root, ["-c", "user.name=Fixture", "-c", "user.email=fixture@invalid", "commit", "--no-gpg-sign", "-m", "baseline"], { write: true });
-  git(root, ["branch", "self-improvement"]); fs.mkdirSync(path.join(root, "node_modules", ".bin"), { recursive: true }); const tsc = path.join(root, "node_modules", ".bin", "tsc"); fs.writeFileSync(tsc, "#!/bin/sh\nexit 0\n", { mode: 0o755 }); fs.chmodSync(tsc, 0o755);
+  git(root, ["branch", "self-improvement"]); const typescriptTsc = path.join(root, "node_modules", "typescript", "bin", "tsc"); fs.mkdirSync(path.dirname(typescriptTsc), { recursive: true }); fs.writeFileSync(typescriptTsc, "#!/bin/sh\nexit 0\n", { mode: 0o755 }); fs.chmodSync(typescriptTsc, 0o755); const tsc = path.join(root, "node_modules", ".bin", "tsc"); fs.mkdirSync(path.dirname(tsc), { recursive: true }); fs.symlinkSync(dependencyLink === "relative" ? "../typescript/bin/tsc" : dependencyLink === "source-absolute" ? typescriptTsc : "/private/tmp", tsc);
   return root;
+}
+function dependencySnapshot(root) {
+  const records = [];
+  const visit = (directory) => {
+    for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+      const candidate = path.join(directory, entry.name); const relative = path.relative(root, candidate); const stat = fs.lstatSync(candidate);
+      const mode = stat.mode & 0o7777;
+      if (stat.isDirectory()) { records.push([relative, "directory", mode]); visit(candidate); }
+      else if (stat.isSymbolicLink()) records.push([relative, "symlink", mode, fs.readlinkSync(candidate)]);
+      else if (stat.isFile()) records.push([relative, "file", mode, crypto.createHash("sha256").update(fs.readFileSync(candidate)).digest("hex")]);
+      else throw new Error("UNSAFE_TEST_DEPENDENCY_ENTRY");
+    }
+  };
+  visit(root); return JSON.stringify(records);
 }
 function transport({ revise = false, malformed = false } = {}) {
   let builder = 0; let analyst = 0;
@@ -29,8 +44,8 @@ function transport({ revise = false, malformed = false } = {}) {
     return { decision: "ACCEPT", rationale: "Validated candidate is acceptable." };
   }};
 }
-function run(options = {}) {
-  const sourceRoot = fixture(); const baseline = git(sourceRoot, ["rev-parse", "self-improvement"]).stdout.trim(); const runtimeRoot = fs.mkdtempSync(path.join(os.tmpdir(), "general-runtime-")); fs.rmdirSync(runtimeRoot);
+function run(options = {}, sourceRoot = fixture()) {
+  const baseline = git(sourceRoot, ["rev-parse", "self-improvement"]).stdout.trim(); const runtimeRoot = fs.mkdtempSync(path.join(os.tmpdir(), "general-runtime-")); fs.rmdirSync(runtimeRoot);
   return runGeneralAutopilotForTest({ instruction: "Create a smoke document.", runtimeRoot, sourceRoot, transport: transport(options) }).then((result) => ({ ...result, sourceRoot, baseline }));
 }
 test("Claude Messages transport forces one schema-bound tool result", async () => {
@@ -45,7 +60,7 @@ test("Claude Messages transport forces one schema-bound tool result", async () =
 });
 
 test("general instruction automatically drives Architect, Builder, Analyst, and final Architect", async () => {
-  const result = await run();
+  const sourceRoot = fixture(); const sourceDependencies = path.join(sourceRoot, "node_modules"); const sourceSnapshot = dependencySnapshot(sourceDependencies); const result = await run({}, sourceRoot);
   assert.equal(result.status, "READY_FOR_INTEGRATION");
   assert.equal(result.iterations, 1);
   assert.deepEqual(result.records.map((item) => item.role), ["architect", "builder", "analyst", "final"]);
@@ -61,11 +76,25 @@ test("general instruction automatically drives Architect, Builder, Analyst, and 
   assert.equal(state.timings.length, 4);
   assert.equal(state.summaries.filter((item) => item.type === "FINAL").length, 1);
   assert.equal(state.summaries.at(-1).terminalReason, "GENERAL_READY_FOR_INTEGRATION");
-  assert.equal(fs.existsSync(path.join(result.dependencyPreparation.destination, ".bin", "tsc")), true);
+  const copiedTsc = path.join(result.dependencyPreparation.destination, ".bin", "tsc");
+  assert.equal(fs.existsSync(copiedTsc), true);
   assert.notEqual(result.dependencyPreparation.source, result.dependencyPreparation.destination);
-  assert.equal(fs.readFileSync(path.join(result.sourceRoot, "node_modules", ".bin", "tsc"), "utf8"), "#!/bin/sh\nexit 0\n");
-  fs.writeFileSync(path.join(result.dependencyPreparation.destination, ".bin", "tsc"), "workspace-only\n");
-  assert.equal(fs.readFileSync(path.join(result.sourceRoot, "node_modules", ".bin", "tsc"), "utf8"), "#!/bin/sh\nexit 0\n");
+  assert.equal(fs.readlinkSync(copiedTsc), "../typescript/bin/tsc");
+  assert.equal(fs.realpathSync(copiedTsc), path.join(result.dependencyPreparation.destination, "typescript", "bin", "tsc"));
+  assert.notEqual(fs.realpathSync(copiedTsc), path.join(result.sourceRoot, "node_modules", "typescript", "bin", "tsc"));
+  assert.equal(fs.readlinkSync(path.join(result.sourceRoot, "node_modules", ".bin", "tsc")), "../typescript/bin/tsc");
+  fs.writeFileSync(path.join(result.dependencyPreparation.destination, "typescript", "bin", "tsc"), "workspace-only\n");
+  assert.equal(fs.readFileSync(path.join(result.sourceRoot, "node_modules", "typescript", "bin", "tsc"), "utf8"), "#!/bin/sh\nexit 0\n");
+  assert.equal(dependencySnapshot(sourceDependencies), sourceSnapshot);
+});
+test("dependency preparation rejects source and destination symlink escapes", async () => {
+  const sourceEscape = fixture({ dependencyLink: "escape" }); const sourceRuntime = fs.mkdtempSync(path.join(os.tmpdir(), "general-runtime-")); fs.rmdirSync(sourceRuntime);
+  await assert.rejects(runGeneralAutopilotForTest({ instruction: "Create a smoke document.", runtimeRoot: sourceRuntime, sourceRoot: sourceEscape, transport: transport() }), /GENERAL_DEPENDENCY_SYMLINK_ESCAPE/u);
+  assert.equal(fs.existsSync(path.join(sourceRuntime, "workspace", "node_modules")), false);
+  const destinationEscape = fixture({ dependencyLink: "source-absolute" }); const destinationRuntime = fs.mkdtempSync(path.join(os.tmpdir(), "general-runtime-")); fs.rmdirSync(destinationRuntime);
+  await assert.rejects(runGeneralAutopilotForTest({ instruction: "Create a smoke document.", runtimeRoot: destinationRuntime, sourceRoot: destinationEscape, transport: transport() }), /GENERAL_DEPENDENCY_SYMLINK_ESCAPE/u);
+  const copiedEscape = path.join(destinationRuntime, "workspace", "node_modules", ".bin", "tsc");
+  assert.equal(fs.realpathSync(copiedEscape), fs.realpathSync(path.join(destinationEscape, "node_modules", "typescript", "bin", "tsc")));
 });
 test("Analyst REVISE is returned directly to Builder iteration two", async () => {
   const result = await run({ revise: true });
