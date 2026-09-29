@@ -105,7 +105,8 @@ export function verifyGeneralCandidate({ root, candidateCommit, expectedParent, 
   if (!Array.isArray(allowedPaths) || allowedPaths.length === 0 || new Set(allowedPaths).size !== allowedPaths.length) throw new Error("GENERAL_CANDIDATE_SCOPE_INVALID");
   if (remotes(root).length !== 0) throw new Error("WORKSPACE_REMOTE_PRESENT");
   if (alternates(root)) throw new Error("WORKSPACE_ALTERNATES_PRESENT");
-  if (statusPorcelain(root, { includeIgnored: true }) !== "") throw new Error("WORKSPACE_NOT_CLEAN");
+  const workspaceStatus = statusPorcelain(root, { includeIgnored: true }).split("\0").filter(Boolean);
+  if (workspaceStatus.some((entry) => !(entry.startsWith("!! ") && (entry.slice(3) === "node_modules/" || entry.slice(3).startsWith("node_modules/"))))) throw new Error("WORKSPACE_NOT_CLEAN");
   const metadata = commitMetadata(root, candidateCommit);
   if (metadata.parents.length !== 1 || metadata.parents[0] !== expectedParent) throw new Error("NONLINEAR_OR_WRONG_PARENT");
   if (previousCandidate !== null && expectedParent !== previousCandidate) throw new Error("CORRECTIVE_PARENT_MISMATCH");

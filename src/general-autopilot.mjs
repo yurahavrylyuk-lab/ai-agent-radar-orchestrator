@@ -77,6 +77,47 @@ function removeValidationCache(workspace) {
   const stat = fs.lstatSync(cache); if (!stat.isDirectory() || stat.isSymbolicLink()) fail("GENERAL_VALIDATION_CACHE_UNSAFE");
   fs.rmSync(cache, { recursive: true, force: true });
 }
+function within(root, candidate) { const relative = path.relative(root, candidate); return relative === "" || (!relative.startsWith(`..${path.sep}`) && relative !== ".." && !path.isAbsolute(relative)); }
+function verifyDependencyTree(root) {
+  const rootStat = fs.lstatSync(root); if (!rootStat.isDirectory() || rootStat.isSymbolicLink()) fail("GENERAL_DEPENDENCY_TREE_UNSAFE");
+  const canonicalRoot = fs.realpathSync(root);
+  const visit = (directory) => {
+    for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+      const candidate = path.join(directory, entry.name); const stat = fs.lstatSync(candidate);
+      if (stat.isSymbolicLink()) { const resolved = fs.realpathSync(candidate); if (!within(canonicalRoot, resolved)) fail("GENERAL_DEPENDENCY_SYMLINK_ESCAPE"); continue; }
+      if (stat.isDirectory()) visit(candidate);
+      else if (!stat.isFile()) fail("GENERAL_DEPENDENCY_TREE_UNSAFE");
+    }
+  };
+  visit(canonicalRoot); return canonicalRoot;
+}
+function dependencyTreeDigest(root) {
+  const canonicalRoot = verifyDependencyTree(root); const entries = [];
+  const visit = (directory) => {
+    for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+      const candidate = path.join(directory, entry.name); const relative = path.relative(canonicalRoot, candidate);
+      if (entry.isDirectory()) visit(candidate); else entries.push(relative);
+    }
+  };
+  visit(canonicalRoot); const hash = crypto.createHash("sha256");
+  for (const relative of entries.sort()) { hash.update(relative); hash.update("\0"); hash.update(fs.readFileSync(path.join(canonicalRoot, relative))); hash.update("\0"); }
+  return hash.digest("hex");
+}
+function lockfileDigest(root) {
+  const lockfile = path.join(root, "package-lock.json"); const stat = fs.lstatSync(lockfile);
+  if (!stat.isFile() || stat.isSymbolicLink()) fail("GENERAL_DEPENDENCY_LOCKFILE_REQUIRED");
+  return sha256Bytes(fs.readFileSync(lockfile));
+}
+function prepareWorkspaceDependencies(sourceRoot, workspace) {
+  const sourceDependencies = path.join(sourceRoot, "node_modules"); const destination = path.join(workspace, "node_modules");
+  let destinationStat = null; try { destinationStat = fs.lstatSync(destination); } catch (error) { if (error.code !== "ENOENT") throw error; }
+  if (destinationStat !== null || fs.lstatSync(path.dirname(destination)).isSymbolicLink()) fail("GENERAL_WORKSPACE_DEPENDENCIES_PRESENT");
+  const sourceLock = lockfileDigest(sourceRoot); if (sourceLock !== lockfileDigest(workspace)) fail("GENERAL_DEPENDENCY_LOCKFILE_MISMATCH");
+  const canonicalSource = verifyDependencyTree(sourceDependencies);
+  fs.cpSync(canonicalSource, destination, { recursive: true, dereference: true, errorOnExist: true, force: false, preserveTimestamps: false });
+  const canonicalDestination = verifyDependencyTree(destination);
+  return { source: canonicalSource, destination: canonicalDestination, lockfileDigest: sourceLock, digest: dependencyTreeDigest(canonicalDestination) };
+}
 function cloneWorkspace(runtimeRoot, sourceRoot) {
   const requested = path.resolve(runtimeRoot); const parent = fs.realpathSync(path.dirname(requested)); const candidate = path.join(parent, path.basename(requested)); const temporaryRoots = new Set([fs.realpathSync(os.tmpdir()), fs.realpathSync("/private/tmp")]);
   if (!temporaryRoots.has(parent) || path.dirname(requested) !== path.resolve(path.dirname(requested))) fail("GENERAL_RUNTIME_TEMPORARY_ROOT_REQUIRED");
@@ -85,8 +126,8 @@ function cloneWorkspace(runtimeRoot, sourceRoot) {
   const baseline = git(sourceRoot, ["rev-parse", "--verify", "self-improvement^{commit}"]).stdout.trim();
   git(runtime, ["clone", "--no-local", "--no-hardlinks", "--branch", "self-improvement", fs.realpathSync(sourceRoot), workspace], { write: true });
   git(workspace, ["remote", "remove", "origin"], { write: true });
-  const branch = "autopilot/" + crypto.randomUUID().slice(0, 12); git(workspace, ["switch", "-c", branch, baseline], { write: true });
-  return { workspace: fs.realpathSync(workspace), baseline, branch };
+  const branch = "autopilot/" + crypto.randomUUID().slice(0, 12); git(workspace, ["switch", "-c", branch, baseline], { write: true }); const dependencies = prepareWorkspaceDependencies(sourceRoot, workspace);
+  return { workspace: fs.realpathSync(workspace), baseline, branch, dependencies };
 }
 async function role(transport, name, input, records, timeoutMs) {
   if (records.length >= MAX_ROLE_CALLS) fail("GENERAL_ROLE_CALL_LIMIT");
@@ -125,16 +166,17 @@ function haltForLimit({ statePath, ownerId, taskId, code }) {
   terminateCycle({ statePath, ownerId, taskId, code, stage: "LIMIT_EXCEEDED" });
   fail(code);
 }
-async function runGeneralAutopilotCore({ instruction, runtimeRoot, transport, sourceRoot, testMode }) {
+async function runGeneralAutopilotCore({ instruction, runtimeRoot, transport, sourceRoot, testMode, sandboxedValidation = false }) {
   if (!safeText(instruction) || !instruction.trim()) fail("GENERAL_INSTRUCTION_REQUIRED");
   if (!testMode && fs.realpathSync(sourceRoot) !== fs.realpathSync(GENERAL_TARGET_ROOT)) fail("GENERAL_TARGET_FIXED");
   const sourceBefore = { head: git(sourceRoot, ["rev-parse", "--verify", "self-improvement^{commit}"]).stdout.trim(), status: statusPorcelain(sourceRoot) };
   if (sourceBefore.status !== "") fail("GENERAL_TARGET_NOT_CLEAN");
   let statePath = null; const ownerId = "general-autopilot-controller";
   try {
-  const records = []; const trace = []; const cycleDeadline = Date.now() + MAX_CYCLE_MS; const setup = cloneWorkspace(runtimeRoot, sourceRoot); const workspace = setup.workspace; statePath = path.join(path.dirname(workspace), "general-controller-state.json");
+  const records = []; const trace = []; const setup = cloneWorkspace(runtimeRoot, sourceRoot); const workspace = setup.workspace; statePath = path.join(path.dirname(workspace), "general-controller-state.json");
   initializeController(statePath, { controllerId: ownerId, repositoryId: GENERAL_AUTOPILOT_REPOSITORY_ID, evidenceMode: "GENERAL_AUTOPILOT", generalAutopilot: true, ownerId, targetRoot: sourceRoot, approval: GENERAL_APPROVAL });
   enqueueRequest({ statePath, ownerId, ownerGeneration: 1, request: { schemaVersion: 2, requestId: crypto.randomUUID(), repositoryId: GENERAL_AUTOPILOT_REPOSITORY_ID, targetRoot: sourceRoot, targetBranch: "self-improvement", baselineCommit: setup.baseline, createdAt: now() } });
+  const cycleDeadline = Date.now() + MAX_CYCLE_MS;
   const deadlines = new Map();
   const remaining = (task) => {
     const deadline = deadlines.get(task.taskId) ?? cycleDeadline; const value = Math.min(deadline, cycleDeadline) - Date.now();
@@ -170,17 +212,17 @@ async function runGeneralAutopilotCore({ instruction, runtimeRoot, transport, so
     if (!testMode && (executorOutput.confinement?.mechanism !== "MACOS_SANDBOX_CHECK" || executorOutput.confinement.policyDigest !== sandbox.digest || !Array.isArray(executorOutput.confinement.records) || executorOutput.confinement.records.length !== 14)) fail("GENERAL_BUILDER_CONFINEMENT_MISMATCH");
     executorConfinement.push(executorOutput.confinement);
     remaining(task); const checkpoint = createLocalCheckpoint({ statePath, ownerId, ownerGeneration: 1, taskId: task.taskId, now: now() }).receipt; remaining(task); candidate = checkpoint.candidateCommit; changes = changedFiles(workspace, setup.baseline, candidate); if (currentBranch(workspace) !== setup.branch) fail("GENERAL_WORKSPACE_BRANCH_MISMATCH");
-    const evidence = VALIDATION.map((command) => shell(command, workspace, profile, testMode, remaining(task))); if (evidence.some((item) => item.timedOut)) haltForLimit({ statePath, ownerId, taskId: task.taskId, code: limitCode(task) }); removeValidationCache(workspace); remaining(task); verifyGeneralCandidate({ root: workspace, candidateCommit: checkpoint.candidateCommit, expectedParent: checkpoint.parentCommit, baselineCommit: setup.baseline, allowedPaths: task.plan.content.allowedChanges.map((item) => item.path), previousCandidate: iteration > 1 ? checkpoint.parentCommit : null }); remaining(task); validations.push(...evidence); if (evidence.some((item) => item.status !== 0)) fail("GENERAL_VALIDATION_FAILED"); trace.push("[VALIDATION] PASS");
+    const dependencyDigest = dependencyTreeDigest(path.join(workspace, "node_modules")); const evidence = VALIDATION.map((command) => shell(command, workspace, profile, testMode && !sandboxedValidation, remaining(task))); if (evidence.some((item) => item.timedOut)) haltForLimit({ statePath, ownerId, taskId: task.taskId, code: limitCode(task) }); removeValidationCache(workspace); if (dependencyTreeDigest(path.join(workspace, "node_modules")) !== dependencyDigest) fail("GENERAL_DEPENDENCY_TREE_MUTATED"); remaining(task); verifyGeneralCandidate({ root: workspace, candidateCommit: checkpoint.candidateCommit, expectedParent: checkpoint.parentCommit, baselineCommit: setup.baseline, allowedPaths: task.plan.content.allowedChanges.map((item) => item.path), previousCandidate: iteration > 1 ? checkpoint.parentCommit : null }); remaining(task); validations.push(...evidence); if (evidence.some((item) => item.status !== 0)) fail("GENERAL_VALIDATION_FAILED"); trace.push("[VALIDATION] PASS");
     state = readState(statePath); finish(task, started); complete(task, { candidateCommit: checkpoint.candidateCommit, parentCommit: checkpoint.parentCommit, treeId: checkpoint.treeId, changedFiles: task.plan.content.allowedChanges.map((item) => ({ ...item, mode: "100644" })), validation: validationEntries(state, task, evidence), deviations: [], blockers: [] });
     state = readState(statePath); task = state.tasks.find((item) => item.taskId === state.pendingTaskId); registerWorkspace({ statePath, ownerId, ownerGeneration: 1, taskId: task.taskId, workspace: { workspaceId: task.binding.workspaceId, role: "analyst", root: workspace, expectedCommit: candidate, registeredAt: now() } });
     started = begin(task); analyst = await runRole(task, "analyst", { instruction, plan: architect, candidate: { commit: candidate, changes }, validation: evidence }); trace.push("[ANALYST] " + analyst.decision); state = readState(statePath); finish(task, started); complete(task, { reviewedCommit: candidate, reviewState: analyst.decision, findings: analyst.findings, requiredChanges: analyst.findings, recommendations: [], validation: validationEntries(state, task, evidence) });
-    if (analyst.decision === "PASS") { state = readState(statePath); task = state.tasks.find((item) => item.taskId === state.pendingTaskId); started = begin(task); const final = await runRole(task, "final", { instruction, candidate, validation: evidence, analyst }); finish(task, started); complete(task, { reviewedCommit: candidate, analystResultDigest: state.analystResultDigest ?? readState(statePath).cycles[0].analystResultDigest, decision: final.decision, rationale: final.rationale, recommendationDispositions: [] }); const status = final.decision === "ACCEPT" ? "READY_FOR_INTEGRATION" : "REJECTED"; const sourceAfter = { head: git(sourceRoot, ["rev-parse", "--verify", "self-improvement^{commit}"]).stdout.trim(), status: statusPorcelain(sourceRoot) }; if (JSON.stringify(sourceAfter) !== JSON.stringify(sourceBefore)) fail("GENERAL_TARGET_MUTATED"); trace.push("[ARCHITECT FINAL] " + final.decision, "[STATE] " + status); return { status, instruction, iterations: iteration, branch: setup.branch, baselineCommit: setup.baseline, candidateCommit: candidate, changedFiles: changes.map((item) => item.path), validation: validations, executorConfinement, analyst: analyst.decision, architect: final.decision, trace, records, controllerStatePath: statePath, deployment: false, integration: false }; }
+    if (analyst.decision === "PASS") { state = readState(statePath); task = state.tasks.find((item) => item.taskId === state.pendingTaskId); started = begin(task); const final = await runRole(task, "final", { instruction, candidate, validation: evidence, analyst }); finish(task, started); complete(task, { reviewedCommit: candidate, analystResultDigest: state.analystResultDigest ?? readState(statePath).cycles[0].analystResultDigest, decision: final.decision, rationale: final.rationale, recommendationDispositions: [] }); const status = final.decision === "ACCEPT" ? "READY_FOR_INTEGRATION" : "REJECTED"; const sourceAfter = { head: git(sourceRoot, ["rev-parse", "--verify", "self-improvement^{commit}"]).stdout.trim(), status: statusPorcelain(sourceRoot) }; if (JSON.stringify(sourceAfter) !== JSON.stringify(sourceBefore)) fail("GENERAL_TARGET_MUTATED"); trace.push("[ARCHITECT FINAL] " + final.decision, "[STATE] " + status); return { status, instruction, iterations: iteration, branch: setup.branch, baselineCommit: setup.baseline, candidateCommit: candidate, changedFiles: changes.map((item) => item.path), validation: validations, executorConfinement, dependencyPreparation: setup.dependencies, analyst: analyst.decision, architect: final.decision, trace, records, controllerStatePath: statePath, deployment: false, integration: false }; }
   }
   state = readState(statePath); task = state.tasks.find((item) => item.taskId === state.pendingTaskId); if (!task || task.purpose !== "ARCHITECT_FINAL_DECISION") fail("GENERAL_CONTROLLER_FINAL_HANDOFF_REQUIRED");
   started = begin(task); const final = await runRole(task, "final", { instruction, candidate, validation: validations, analyst }); if (final.decision !== "REJECT") fail("GENERAL_ARCHITECT_ACCEPT_WITHOUT_ANALYST_PASS"); finish(task, started);
   complete(task, { reviewedCommit: candidate, analystResultDigest: readState(statePath).cycles[0].analystResultDigest, decision: final.decision, rationale: final.rationale, recommendationDispositions: [] });
   const sourceAfter = { head: git(sourceRoot, ["rev-parse", "--verify", "self-improvement^{commit}"]).stdout.trim(), status: statusPorcelain(sourceRoot) }; if (JSON.stringify(sourceAfter) !== JSON.stringify(sourceBefore)) fail("GENERAL_TARGET_MUTATED");
-  trace.push("[ARCHITECT FINAL] REJECT", "[STATE] REJECTED"); return { status: "REJECTED", instruction, iterations: MAX_ITERATIONS, branch: setup.branch, baselineCommit: setup.baseline, candidateCommit: candidate, changedFiles: changes.map((item) => item.path), validation: validations, executorConfinement, analyst: "REVISE", architect: "REJECT", trace, records, controllerStatePath: statePath, deployment: false, integration: false };
+  trace.push("[ARCHITECT FINAL] REJECT", "[STATE] REJECTED"); return { status: "REJECTED", instruction, iterations: MAX_ITERATIONS, branch: setup.branch, baselineCommit: setup.baseline, candidateCommit: candidate, changedFiles: changes.map((item) => item.path), validation: validations, executorConfinement, dependencyPreparation: setup.dependencies, analyst: "REVISE", architect: "REJECT", trace, records, controllerStatePath: statePath, deployment: false, integration: false };
   } catch (error) {
     if (statePath !== null) {
       try { terminateCycle({ statePath, ownerId, code: `GENERAL_FAIL_CLOSED:${error.code ?? error.message}` }); }
@@ -197,6 +239,6 @@ export async function runGeneralAutopilot({ instruction, runtimeRoot, transport 
   if (!lock.acquired) fail("GENERAL_AUTOPILOT_ACTIVE_CYCLE");
   try { return await runGeneralAutopilotCore({ instruction, runtimeRoot, transport, sourceRoot: GENERAL_TARGET_ROOT, testMode: false }); } finally { lock.release(); }
 }
-export async function runGeneralAutopilotForTest({ instruction, runtimeRoot, transport, sourceRoot }) {
-  return runGeneralAutopilotCore({ instruction, runtimeRoot, transport, sourceRoot, testMode: true });
+export async function runGeneralAutopilotForTest({ instruction, runtimeRoot, transport, sourceRoot, sandboxedValidation = false }) {
+  return runGeneralAutopilotCore({ instruction, runtimeRoot, transport, sourceRoot, testMode: true, sandboxedValidation });
 }

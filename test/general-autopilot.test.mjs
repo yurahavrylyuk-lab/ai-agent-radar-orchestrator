@@ -6,15 +6,17 @@ import { spawnSync } from "node:child_process";
 import test from "node:test";
 import { ClaudeMessagesTransport, runGeneralAutopilotForTest } from "../src/general-autopilot.mjs";
 import { git } from "../src/git-evidence.mjs";
-import { offlineExecutorSandboxProfile } from "../src/operator-boundary.mjs";
+import { offlineExecutorSandboxProfile, PRODUCTION_AUTHORITY_ROOT, PRODUCTION_CONTROLLER_ROOT, PROTECTED_REAL_TARGET_ROOT } from "../src/operator-boundary.mjs";
 
-function fixture() {
+function fixture({ scripts = { build: "tsc", test: "node -e \"\"", "worker:typecheck": "tsc" } } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "general-autopilot-"));
   git(root, ["init", "-b", "main"], { write: true });
-  fs.writeFileSync(path.join(root, "package.json"), JSON.stringify({ scripts: { build: "node -e \"\"", test: "node -e \"\"", "worker:typecheck": "node -e \"\"" } }));
+  fs.writeFileSync(path.join(root, "package.json"), JSON.stringify({ scripts }));
+  fs.writeFileSync(path.join(root, "package-lock.json"), JSON.stringify({ name: "general-autopilot-fixture", lockfileVersion: 3, requires: true, packages: {} }));
+  fs.writeFileSync(path.join(root, ".gitignore"), "node_modules/\n");
   fs.writeFileSync(path.join(root, "README.md"), "fixture\n");
   git(root, ["add", "."], { write: true }); git(root, ["-c", "user.name=Fixture", "-c", "user.email=fixture@invalid", "commit", "--no-gpg-sign", "-m", "baseline"], { write: true });
-  git(root, ["branch", "self-improvement"]);
+  git(root, ["branch", "self-improvement"]); fs.mkdirSync(path.join(root, "node_modules", ".bin"), { recursive: true }); const tsc = path.join(root, "node_modules", ".bin", "tsc"); fs.writeFileSync(tsc, "#!/bin/sh\nexit 0\n", { mode: 0o755 }); fs.chmodSync(tsc, 0o755);
   return root;
 }
 function transport({ revise = false, malformed = false } = {}) {
@@ -50,6 +52,7 @@ test("general instruction automatically drives Architect, Builder, Analyst, and 
   assert.ok(result.trace.includes("[ARCHITECT] plan created"));
   assert.ok(result.trace.includes("[STATE] READY_FOR_INTEGRATION"));
   assert.equal(result.deployment, false); assert.equal(result.integration, false);
+  assert.deepEqual(result.validation.map((item) => [item.command, item.status]), [["npm run build", 0], ["npm test", 0], ["npm run worker:typecheck", 0]]);
   assert.match(result.branch, /^autopilot\//u);
   assert.equal(git(result.sourceRoot, ["rev-parse", "self-improvement"]).stdout.trim(), result.baseline);
   const state = JSON.parse(fs.readFileSync(result.controllerStatePath, "utf8"));
@@ -58,6 +61,11 @@ test("general instruction automatically drives Architect, Builder, Analyst, and 
   assert.equal(state.timings.length, 4);
   assert.equal(state.summaries.filter((item) => item.type === "FINAL").length, 1);
   assert.equal(state.summaries.at(-1).terminalReason, "GENERAL_READY_FOR_INTEGRATION");
+  assert.equal(fs.existsSync(path.join(result.dependencyPreparation.destination, ".bin", "tsc")), true);
+  assert.notEqual(result.dependencyPreparation.source, result.dependencyPreparation.destination);
+  assert.equal(fs.readFileSync(path.join(result.sourceRoot, "node_modules", ".bin", "tsc"), "utf8"), "#!/bin/sh\nexit 0\n");
+  fs.writeFileSync(path.join(result.dependencyPreparation.destination, ".bin", "tsc"), "workspace-only\n");
+  assert.equal(fs.readFileSync(path.join(result.sourceRoot, "node_modules", ".bin", "tsc"), "utf8"), "#!/bin/sh\nexit 0\n");
 });
 test("Analyst REVISE is returned directly to Builder iteration two", async () => {
   const result = await run({ revise: true });
@@ -67,6 +75,14 @@ test("Analyst REVISE is returned directly to Builder iteration two", async () =>
   assert.equal(result.analyst, "PASS");
   const state = JSON.parse(fs.readFileSync(result.controllerStatePath, "utf8"));
   assert.deepEqual(state.tasks.map((item) => item.purpose), ["ARCHITECT_PLAN", "BUILDER_IMPLEMENTATION", "ANALYST_REVIEW", "BUILDER_IMPLEMENTATION", "ANALYST_REVIEW", "ARCHITECT_FINAL_DECISION"]);
+});
+test("sandboxed validation cannot write authority, controller, or protected target paths", async () => {
+  const attempts = [path.join(PRODUCTION_AUTHORITY_ROOT, "general-validation-denied"), path.join(PRODUCTION_CONTROLLER_ROOT, "general-validation-denied"), path.join(PROTECTED_REAL_TARGET_ROOT, "general-validation-denied")];
+  assert.ok(attempts.every((file) => !fs.existsSync(file)));
+  const command = (file) => `node -e 'require("node:fs").writeFileSync(${JSON.stringify(file)}, "denied")'`;
+  const sourceRoot = fixture({ scripts: { build: command(attempts[0]), test: command(attempts[1]), "worker:typecheck": command(attempts[2]) } }); const runtimeRoot = fs.mkdtempSync(path.join(os.tmpdir(), "general-runtime-")); fs.rmdirSync(runtimeRoot);
+  await assert.rejects(runGeneralAutopilotForTest({ instruction: "Create a smoke document.", runtimeRoot, sourceRoot, transport: transport(), sandboxedValidation: true }), /GENERAL_VALIDATION_FAILED/u);
+  assert.ok(attempts.every((file) => !fs.existsSync(file)));
 });
 test("malformed model output and target overrides fail closed", async () => {
   const sourceRoot = fixture(); const runtimeRoot = fs.mkdtempSync(path.join(os.tmpdir(), "general-runtime-")); fs.rmdirSync(runtimeRoot);

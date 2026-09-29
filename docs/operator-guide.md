@@ -42,17 +42,19 @@ The separately authorized general path is human-started and accepts one
 natural-language instruction. It uses only the fixed AI Radar target and its
 `self-improvement` branch; `--target`, `--source`, and `--authority`
 overrides are rejected. Supply a fresh direct child of the system temporary
-root and keep the OpenAI credential outside Git:
+root and keep the Anthropic credential outside Git:
 
 ```sh
-OPENAI_API_KEY=... npm run autopilot -- --runtime /private/tmp/ai-radar-general-run \
+ANTHROPIC_API_KEY=... npm run autopilot -- --runtime /private/tmp/ai-radar-general-run \
   "Create docs/autopilot-general-smoke.md with a short smoke-test description."
 ```
 
-The controller uses OpenAI Responses structured outputs for Architect, Builder
+The controller uses Claude Messages structured outputs for Architect, Builder
 reasoning, Analyst, and Architect Final. The model can propose only declared
 file contents; a sandboxed local executor performs those writes in an isolated
-`autopilot/<task-id>` branch with no remote. Local `npm run build`,
+`autopilot/<task-id>` branch with no remote. Before validation, the controller
+deep-copies the verified canonical target `node_modules` tree into the isolated
+workspace; it does not link or install dependencies. Local `npm run build`,
 `npm test`, and `npm run worker:typecheck` run under network denial. The
 command prints role progress and a final report, then stops at
 `READY_FOR_INTEGRATION`; it does not merge, push, integrate, deploy, or

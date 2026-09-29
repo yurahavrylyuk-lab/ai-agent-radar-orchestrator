@@ -15,7 +15,8 @@ The command requires `ANTHROPIC_API_KEY` and uses `claude-sonnet-4-6` by
 default; `ANTHROPIC_MODEL` may select a different Claude model. It never accepts a
 caller-selected target: it reads only the fixed AI Radar `self-improvement`
 branch, clones an isolated `autopilot/<task-id>` workspace, removes its
-remote, restricts the Builder to validated file writes, runs local build/test/
+remote, deep-copies the verified canonical `node_modules` tree into that
+workspace, restricts the Builder to validated file writes, runs local build/test/
 typecheck commands under network denial, and stops at
 `READY_FOR_INTEGRATION`. It does not merge, push, deploy, integrate, change
 production configuration, or use a provider fallback.
