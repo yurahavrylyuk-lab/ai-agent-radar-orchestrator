@@ -139,6 +139,8 @@ export function offlineExecutorSandboxProfile({ workspaceRoot, validationHome = 
     "(version 1)",
     "(allow default)",
     "(deny network*)",
+    // macOS profiles cannot path-scope local Unix sockets; write confinement limits socket creation to the approved roots below.
+    roots.validationHomeRoot ? "(allow network* (local unix-socket))" : null,
     "(deny file-write*)",
     `(deny file-read* file-write* (subpath ${quote(roots.authorityRoot.canonicalRoot)}))`,
     `(deny file-write* (subpath ${quote(roots.controllerRoot.canonicalRoot)}))`,

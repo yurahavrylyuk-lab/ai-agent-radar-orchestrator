@@ -57,7 +57,17 @@ function hygieneScripts({ tracked = null, unexpected = null, mutateDependency = 
   return { build: nodeScript(build), test: nodeScript(test), "worker:typecheck": nodeScript(worker) };
 }
 function validationTempScripts(externalPath) {
-  const build = `const fs=require("node:fs"),os=require("node:os"),path=require("node:path");const tmp=os.tmpdir();if(tmp!==process.env.TMPDIR||tmp!==process.env.TMP||tmp!==process.env.TEMP||tmp!==path.join(process.env.HOME,"tmp"))throw new Error("TEMP_ENV_MISMATCH");const probe=fs.mkdtempSync(path.join(tmp,"general-autopilot-probe-"));fs.writeFileSync(path.join(probe,"probe"),"ok");fs.rmSync(probe,{recursive:true,force:true});let externalDenied=false;try{fs.writeFileSync(${JSON.stringify(externalPath)},"forbidden")}catch(error){externalDenied=["EPERM","EACCES"].includes(error.code)}if(!externalDenied)throw new Error("EXTERNAL_TEMP_WRITE_ALLOWED");process.stdout.write("TEMP_REPORT:"+JSON.stringify({tmp,tmpdir:os.tmpdir(),tmpEnv:process.env.TMP,tmpVariable:process.env.TEMP,mode:fs.statSync(tmp).mode&0o7777,externalDenied})+"\\n")`;
+  const build = [
+    'const fs=require("node:fs"),net=require("node:net"),os=require("node:os"),path=require("node:path");',
+    'const tmp=os.tmpdir();if(tmp!==process.env.TMPDIR||tmp!==process.env.TMP||tmp!==process.env.TEMP||tmp!==path.join(process.env.HOME,"tmp"))throw new Error("TEMP_ENV_MISMATCH");',
+    'const denied=(action)=>new Promise((resolve)=>{let socket;try{socket=action()}catch(error){resolve(["EPERM","EACCES"].includes(error.code));return}socket.once("error",(error)=>resolve(["EPERM","EACCES"].includes(error.code)));socket.once("listening",()=>socket.close(()=>resolve(false)));});',
+    '(async()=>{const probe=fs.mkdtempSync(path.join(tmp,"general-autopilot-probe-"));fs.writeFileSync(path.join(probe,"probe"),"ok");fs.rmSync(probe,{recursive:true,force:true});',
+    'const socketPath=path.join(tmp,"tsx-"+process.pid+".pipe"),server=net.createServer();await new Promise((resolve,reject)=>{server.once("error",reject);server.listen(socketPath,()=>server.close((error)=>error?reject(error):resolve()));});const socketRemoved=!fs.existsSync(socketPath);if(!socketRemoved)fs.unlinkSync(socketPath);',
+    'fs.writeFileSync("workspace-write-probe","ok");const workspaceWriteAllowed=fs.readFileSync("workspace-write-probe","utf8")==="ok";fs.unlinkSync("workspace-write-probe");const homeProbe=path.join(tmp,"validation-home-write-probe");fs.writeFileSync(homeProbe,"ok");const homeWriteAllowed=fs.readFileSync(homeProbe,"utf8")==="ok";fs.unlinkSync(homeProbe);',
+    'let externalDenied=false;try{fs.writeFileSync(', JSON.stringify(externalPath), ',"forbidden")}catch(error){externalDenied=["EPERM","EACCES"].includes(error.code)}',
+    'const externalSocketPath=', JSON.stringify(`${externalPath}.socket`), ';const externalSocketDenied=await denied(()=>net.createServer().listen(externalSocketPath));if(fs.existsSync(externalSocketPath))fs.unlinkSync(externalSocketPath);const inboundDenied=await denied(()=>net.createServer().listen({port:0,host:"127.0.0.1"}));const outboundDenied=await denied(()=>net.createConnection({port:9,host:"127.0.0.1"}));if(!socketRemoved||!workspaceWriteAllowed||!homeWriteAllowed||!externalDenied||!externalSocketDenied||!inboundDenied||!outboundDenied)throw new Error("VALIDATION_SOCKET_CONFINEMENT_FAILED");',
+    'process.stdout.write("TEMP_REPORT:"+JSON.stringify({tmp,tmpdir:os.tmpdir(),tmpEnv:process.env.TMP,tmpVariable:process.env.TEMP,mode:fs.statSync(tmp).mode&0o7777,socketPath,socketRemoved,workspaceWriteAllowed,homeWriteAllowed,externalDenied,externalSocketDenied,inboundDenied,outboundDenied})+"\\n");})().catch((error)=>{console.error(error.stack||error);process.exitCode=1});',
+  ].join("");
   const test = 'process.stdout.write("temp-test-ran\\n")';
   const worker = 'require("node:fs").writeFileSync("worker-configuration.d.ts","validation-generated\\n");process.stdout.write("temp-worker-ran\\n")';
   return { build: nodeScript(build), test: nodeScript(test), "worker:typecheck": nodeScript(worker) };
@@ -129,15 +139,16 @@ test("sandboxed validation confines Node temporary directories to validation hom
   if (process.env.GOV002_FS_BOUNDARY_EVIDENCE) {
     const runtime = fs.mkdtempSync(path.join(os.tmpdir(), "general-validation-profile-")); const workspace = path.join(runtime, "workspace"); const validationHome = path.join(runtime, "validation-home"); fs.mkdirSync(workspace); fs.mkdirSync(validationHome, { mode: 0o700 });
     const sandbox = offlineExecutorSandboxProfile({ workspaceRoot: workspace, validationHome });
-    assert.match(sandbox.profile, /\(deny file-write\*\)/u); assert.ok(sandbox.profile.includes(sandbox.roots.validationHomeRoot.canonicalRoot)); assert.equal(sandbox.roots.validationHomeRoot.mode, "0700");
+    const builderSandbox = offlineExecutorSandboxProfile({ workspaceRoot: workspace });
+    assert.match(sandbox.profile, /\(deny file-write\*\)/u); assert.match(sandbox.profile, /\(allow network\* \(local unix-socket\)\)/u); assert.doesNotMatch(builderSandbox.profile, /\(allow network\* \(local unix-socket\)\)/u); assert.ok(sandbox.profile.includes(sandbox.roots.validationHomeRoot.canonicalRoot)); assert.equal(sandbox.roots.validationHomeRoot.mode, "0700");
     t.skip("the offline wrapper already runs under sandbox-exec and cannot nest validation confinement"); return;
   }
   const externalPath = "/private/tmp/general-autopilot-validation-temp-denied"; assert.equal(fs.existsSync(externalPath), false);
-  const sourceRoot = fixture({ scripts: validationTempScripts(externalPath) }); const runtimeRoot = fs.mkdtempSync(path.join(os.tmpdir(), "general-runtime-")); fs.rmdirSync(runtimeRoot);
+  const sourceRoot = fixture({ scripts: validationTempScripts(externalPath) }); const runtimeRoot = fs.mkdtempSync("/private/tmp/general-runtime-"); fs.rmdirSync(runtimeRoot);
   const result = await runGeneralAutopilotForTest({ instruction: "Create a smoke document.", runtimeRoot, sourceRoot, transport: transport(), sandboxedValidation: true }); const workspace = path.dirname(result.dependencyPreparation.destination);
   const report = JSON.parse(result.validation[0].output.split(/\r?\n/u).find((line) => line.startsWith("TEMP_REPORT:"))?.slice("TEMP_REPORT:".length) ?? "");
-  assert.equal(report.tmp, path.join(path.dirname(workspace), "validation-home", "tmp")); assert.equal(report.tmpdir, report.tmp); assert.equal(report.tmpEnv, report.tmp); assert.equal(report.tmpVariable, report.tmp); assert.equal(report.mode, 0o700); assert.equal(report.externalDenied, true);
-  assert.equal(fs.existsSync(externalPath), false); assert.equal(fs.existsSync(path.join(path.dirname(workspace), "validation-home")), false);
+  assert.equal(report.tmp, path.join(path.dirname(workspace), "validation-home", "tmp")); assert.equal(report.tmpdir, report.tmp); assert.equal(report.tmpEnv, report.tmp); assert.equal(report.tmpVariable, report.tmp); assert.equal(report.mode, 0o700); assert.equal(path.dirname(report.socketPath), report.tmp); assert.match(path.basename(report.socketPath), /^tsx-\d+\.pipe$/u); assert.equal(report.socketRemoved, true); assert.equal(report.workspaceWriteAllowed, true); assert.equal(report.homeWriteAllowed, true); assert.equal(report.externalDenied, true); assert.equal(report.externalSocketDenied, true); assert.equal(report.inboundDenied, true); assert.equal(report.outboundDenied, true);
+  assert.equal(fs.existsSync(externalPath), false); assert.equal(fs.existsSync(`${externalPath}.socket`), false); assert.equal(fs.existsSync(path.join(path.dirname(workspace), "validation-home")), false);
   const status = statusPorcelain(workspace, { includeIgnored: true }).split("\0").filter(Boolean); assert.ok(status.length > 0 && status.every((entry) => entry.startsWith("!! node_modules/")));
 });
 test("validation failures report the reviewed command, bounded output, and redacted diagnostics", async () => {
