@@ -56,6 +56,12 @@ function hygieneScripts({ tracked = null, unexpected = null, mutateDependency = 
   const worker = `const fs=require("node:fs"),path=require("node:path");fs.writeFileSync("worker-configuration.d.ts","validation-generated\\n");${tracked ? `fs.writeFileSync(${JSON.stringify(tracked)},"unexpected\\n");` : ""}${unexpected ? `fs.mkdirSync(path.dirname(${JSON.stringify(unexpected)}),{recursive:true});fs.writeFileSync(${JSON.stringify(unexpected)},"unexpected\\n");` : ""}${mutateDependency ? 'fs.writeFileSync("node_modules/typescript/bin/tsc","mutated\\n");' : ""}process.stdout.write("worker-generated\\n")`;
   return { build: nodeScript(build), test: nodeScript(test), "worker:typecheck": nodeScript(worker) };
 }
+function validationTempScripts(externalPath) {
+  const build = `const fs=require("node:fs"),os=require("node:os"),path=require("node:path");const tmp=os.tmpdir();if(tmp!==process.env.TMPDIR||tmp!==process.env.TMP||tmp!==process.env.TEMP||tmp!==path.join(process.env.HOME,"tmp"))throw new Error("TEMP_ENV_MISMATCH");const probe=fs.mkdtempSync(path.join(tmp,"general-autopilot-probe-"));fs.writeFileSync(path.join(probe,"probe"),"ok");fs.rmSync(probe,{recursive:true,force:true});let externalDenied=false;try{fs.writeFileSync(${JSON.stringify(externalPath)},"forbidden")}catch(error){externalDenied=["EPERM","EACCES"].includes(error.code)}if(!externalDenied)throw new Error("EXTERNAL_TEMP_WRITE_ALLOWED");process.stdout.write("TEMP_REPORT:"+JSON.stringify({tmp,tmpdir:os.tmpdir(),tmpEnv:process.env.TMP,tmpVariable:process.env.TEMP,mode:fs.statSync(tmp).mode&0o7777,externalDenied})+"\\n")`;
+  const test = 'process.stdout.write("temp-test-ran\\n")';
+  const worker = 'require("node:fs").writeFileSync("worker-configuration.d.ts","validation-generated\\n");process.stdout.write("temp-worker-ran\\n")';
+  return { build: nodeScript(build), test: nodeScript(test), "worker:typecheck": nodeScript(worker) };
+}
 test("Claude Messages transport forces one schema-bound tool result", async () => {
   assert.throws(() => new ClaudeMessagesTransport({ apiKey: "" }), /GENERAL_ANTHROPIC_API_KEY_REQUIRED/u);
   const originalFetch = globalThis.fetch; let request;
@@ -114,6 +120,21 @@ test("validation cleans only known generated effects and preserves evidence", as
   assert.equal(fs.readFileSync(path.join(workspace, "worker-configuration.d.ts"), "utf8"), git(workspace, ["show", `${result.candidateCommit}:worker-configuration.d.ts`]).stdout);
   const status = statusPorcelain(workspace, { includeIgnored: true }).split("\0").filter(Boolean);
   assert.ok(status.length > 0 && status.every((entry) => entry.startsWith("!! node_modules/")));
+});
+test("sandboxed validation confines Node temporary directories to validation home", async (t) => {
+  if (process.env.GOV002_FS_BOUNDARY_EVIDENCE) {
+    const runtime = fs.mkdtempSync(path.join(os.tmpdir(), "general-validation-profile-")); const workspace = path.join(runtime, "workspace"); const validationHome = path.join(runtime, "validation-home"); fs.mkdirSync(workspace); fs.mkdirSync(validationHome, { mode: 0o700 });
+    const sandbox = offlineExecutorSandboxProfile({ workspaceRoot: workspace, validationHome });
+    assert.match(sandbox.profile, /\(deny file-write\*\)/u); assert.ok(sandbox.profile.includes(sandbox.roots.validationHomeRoot.canonicalRoot)); assert.equal(sandbox.roots.validationHomeRoot.mode, "0700");
+    t.skip("the offline wrapper already runs under sandbox-exec and cannot nest validation confinement"); return;
+  }
+  const externalPath = "/private/tmp/general-autopilot-validation-temp-denied"; assert.equal(fs.existsSync(externalPath), false);
+  const sourceRoot = fixture({ scripts: validationTempScripts(externalPath) }); const runtimeRoot = fs.mkdtempSync(path.join(os.tmpdir(), "general-runtime-")); fs.rmdirSync(runtimeRoot);
+  const result = await runGeneralAutopilotForTest({ instruction: "Create a smoke document.", runtimeRoot, sourceRoot, transport: transport(), sandboxedValidation: true }); const workspace = path.dirname(result.dependencyPreparation.destination);
+  const report = JSON.parse(result.validation[0].output.split(/\r?\n/u).find((line) => line.startsWith("TEMP_REPORT:"))?.slice("TEMP_REPORT:".length) ?? "");
+  assert.equal(report.tmp, path.join(path.dirname(workspace), "validation-home", "tmp")); assert.equal(report.tmpdir, report.tmp); assert.equal(report.tmpEnv, report.tmp); assert.equal(report.tmpVariable, report.tmp); assert.equal(report.mode, 0o700); assert.equal(report.externalDenied, true);
+  assert.equal(fs.existsSync(externalPath), false); assert.equal(fs.existsSync(path.join(path.dirname(workspace), "validation-home")), false);
+  const status = statusPorcelain(workspace, { includeIgnored: true }).split("\0").filter(Boolean); assert.ok(status.length > 0 && status.every((entry) => entry.startsWith("!! node_modules/")));
 });
 test("validation fails closed on unexpected tracked or untracked output and dependency mutation", async () => {
   const cases = [
