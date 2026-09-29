@@ -72,15 +72,27 @@ Roles cannot issue authority, edit the authority ledger, mutate the authoritativ
 target, or invoke trusted integration as a substitute for the human operator.
 Preserve controller-owned task identities and validation bindings.
 
-The sole automatic-role exception is the human-started `autopilot-offline`
-command. It uses only the deterministic `OfflineFixtureTransport`, disposable
-authority/state and an independent disposable Git repository below the system
-temporary root. Its Builder child runs under the reviewed macOS sandbox, and
-the run must stop at a non-mutating `READY_FOR_INTEGRATION` summary. Existing
-or failed runtime directories are never resumed. This
-exception cannot consume production authority, target the AI Agent Radar
-repository, create a production integration intent, contact a provider, or
-authorize automatic real-role launch.
+Automatic roles are forbidden except for two human-started, controller-managed
+capabilities. `autopilot-offline` remains limited to its deterministic
+`OfflineFixtureTransport`, disposable authority/state, and independent
+disposable Git repository below the system temporary root. It cannot consume
+production authority, target the AI Agent Radar repository, create a production
+integration intent, contact a provider, or authorize a real role.
+
+**General Instruction Autopilot v1** is the sole additional exception. One
+explicit natural-language instruction from the Trusted Human Operator may start
+one fresh, non-resumable cycle for the fixed AI Agent Radar repository at
+`/Users/yuriy/Documents/IT Study/General/General/AI Agents/The AI Monitoring
+Agent`. The controller may make model-backed Architect, Builder reasoning,
+Analyst, and final Architect calls, and may automatically relay only
+controller-owned task data and Analyst `REVISE` findings between them. It may
+create an isolated task workspace and an `autopilot/<task-id>` branch based on
+`self-improvement`, use the restricted local executor to make the approved
+candidate changes, create local candidate commits, and run approved local
+build, test, and typecheck commands. It must stop at
+`READY_FOR_INTEGRATION`; it has no authority to merge, push, deploy, alter
+production configuration or secrets, issue or consume authority, create an
+integration intent, or modify the protected checkout at its canonical path.
 
 Controller maintenance is a separate explicitly scoped task. It does not
 inherit real-pilot authority or permit bypassing a role sandbox.
@@ -123,7 +135,11 @@ Preserve the accepted limits:
   Human waiting is excluded.
 * Zero additional paid execution; included subscription capacity only.
 * No paid fallback or model fallback. Automatic role launch is forbidden except
-  for the deterministic, disposable `OFFLINE_FIXTURE` autopilot described above.
+  for `OFFLINE_FIXTURE` and the explicitly human-initiated General Instruction
+  Autopilot v1 capability above. General Autopilot may use exactly one explicitly
+  implemented model-provider transport for role reasoning; malformed output,
+  unavailable included capacity, or an unavailable credential must fail the
+  cycle closed. It may not fall back to fixtures or a different model/provider.
 * No automatic credit purchase, additional-usage-capacity purchase, paid or
   overage-path upgrade, or autonomous billing or spending authorization.
 
@@ -132,8 +148,15 @@ uncertain: WAIT / HALT. Do not purchase credits or switch to a paid execution
 mechanism. Only a separate explicit human governance decision may alter this
 rule.
 
-Do not introduce or invoke live provider, email, deployment, scheduling,
-publication, credential, or billing adapters.
+Outside General Instruction Autopilot v1, do not introduce or invoke live
+provider, email, deployment, scheduling, publication, credential, or billing
+adapters. Within that capability, the provider transport may use network only
+for the selected model-provider request. Credentials remain outside Git and
+must never enter prompts, logs, commits, candidate files, or role outputs.
+Builder commands remain separately network-denied. No automatic credit
+purchase, capacity purchase, paid/overage upgrade, autonomous billing, email,
+scheduling, publication, deployment, or production behavior change is
+authorized.
 Do not change Cloudflare, production Cron, provider quotas, secrets, or
 production behavior under governance or pilot authorization.
 
@@ -153,6 +176,15 @@ main = 3a6946fe07ea3838488c789cba4c69718b2ed328
 Outside the separately authorized integration operation, treat the target
 as read-only. Never reset, repair, clean, restore, or synchronize it to make
 validation pass.
+
+General Instruction Autopilot v1 may read the fixed target only to establish an
+isolated task workspace from `self-improvement`. The canonical protected
+checkout remains read-only. All candidate writes and commits must be confined
+to the registered isolated task workspace and its `autopilot/<task-id>`
+branch. The controller must reject arbitrary repository, workspace, branch,
+target-path, authority-store, controller-source, and production configuration
+writes. It must not reset, repair, clean, restore, synchronize, merge, or push
+either the protected checkout or a production branch.
 
 Preservation evidence includes refs, repository identity, manifest, modes,
 configuration, status, and semantic index evidence.
@@ -176,6 +208,18 @@ exception to admission's clean/index-equals-HEAD condition.
 Inspect scripts before running them. For implementation verification, use
 the complete approved scripts/test-offline.sh wrapper under OS-enforced
 network denial. Do not substitute an unsandboxed run.
+
+For General Instruction Autopilot v1, model-provider networking belongs only
+to the explicit controller-owned model transport. The Builder model proposes
+structured changes and commands but receives no unrestricted shell or
+filesystem authority. The trusted restricted executor validates and performs
+allowed local operations only in the designated task workspace, under the
+existing authority-store, controller, protected-checkout, production, and
+local-network restrictions. The implementation must bound context to relevant
+repository metadata, plan, findings, diff/object evidence, and validation
+output; it must validate strict machine-readable role results before every
+controller transition. No recursive role spawning, background loop, crash
+resume, or reconciliation facility is authorized.
 
 Use disposable repositories for mutation tests. Never use the protected
 target as a mutation fixture. Add no dependencies or downloads without
