@@ -1,6 +1,24 @@
 # AI Agent Radar Offline Self-Improvement Controller
 
-This repository is a dependency-free, local-only governance controller. Phase 1 established the fail-closed offline prototype; GOV-002 Phase 2 adds human-assisted, data-only role handoffs and trusted Git operations that are enabled only for disposable fixture repositories. The bounded offline autopilot can automatically run deterministic fixture roles in a disposable repository, but it does not launch Codex or another model, contact providers, publish Git changes, send notifications, schedule work, or activate the real pilot.
+This repository is a dependency-free governance controller. Phase 1 established the fail-closed offline prototype; GOV-002 Phase 2 adds human-assisted, data-only role handoffs and trusted Git operations that are enabled only for disposable fixture repositories. The bounded offline autopilot remains deterministic and provider-free. General Instruction Autopilot v1 is a separate, human-started path that uses one OpenAI Responses transport for structured role reasoning, an isolated AI Radar task branch, sandboxed local validation, and a non-mutating `READY_FOR_INTEGRATION` outcome.
+
+## General Instruction Autopilot v1
+
+Run one fresh temporary runtime with a natural-language instruction:
+
+```sh
+npm run autopilot -- --runtime /private/tmp/ai-radar-general-run \
+  "Create docs/autopilot-general-smoke.md with a short smoke-test description."
+```
+
+The command requires `OPENAI_API_KEY` and optionally accepts
+`GENERAL_AUTOPILOT_MODEL` (default: `gpt-6-astra`). It never accepts a
+caller-selected target: it reads only the fixed AI Radar `self-improvement`
+branch, clones an isolated `autopilot/<task-id>` workspace, removes its
+remote, restricts the Builder to validated file writes, runs local build/test/
+typecheck commands under network denial, and stops at
+`READY_FOR_INTEGRATION`. It does not merge, push, deploy, integrate, change
+production configuration, or use a provider fallback.
 
 ## Offline autopilot proof
 

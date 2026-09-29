@@ -36,7 +36,29 @@ then follows controller-generated state through a corrected second iteration.
 Both scenarios end at `READY_FOR_INTEGRATION`; they never create a production
 integration intent or update the protected target.
 
-The command launches only the deterministic `OfflineFixtureTransport`. Its
+## General Instruction Autopilot v1
+
+The separately authorized general path is human-started and accepts one
+natural-language instruction. It uses only the fixed AI Radar target and its
+`self-improvement` branch; `--target`, `--source`, and `--authority`
+overrides are rejected. Supply a fresh direct child of the system temporary
+root and keep the OpenAI credential outside Git:
+
+```sh
+OPENAI_API_KEY=... npm run autopilot -- --runtime /private/tmp/ai-radar-general-run \
+  "Create docs/autopilot-general-smoke.md with a short smoke-test description."
+```
+
+The controller uses OpenAI Responses structured outputs for Architect, Builder
+reasoning, Analyst, and Architect Final. The model can propose only declared
+file contents; a sandboxed local executor performs those writes in an isolated
+`autopilot/<task-id>` branch with no remote. Local `npm run build`,
+`npm test`, and `npm run worker:typecheck` run under network denial. The
+command prints role progress and a final report, then stops at
+`READY_FOR_INTEGRATION`; it does not merge, push, integrate, deploy, or
+modify the canonical protected checkout.
+
+The offline command launches only the deterministic `OfflineFixtureTransport`. Its
 Builder tool request is executed in an independent Git repository by a child
 under a dedicated `sandbox-exec` profile. Do not wrap this command in another
 `sandbox-exec`: macOS rejects nested sandbox application. The mandatory test

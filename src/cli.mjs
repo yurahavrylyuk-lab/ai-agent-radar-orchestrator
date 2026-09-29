@@ -15,6 +15,7 @@ import { submitRoleResult } from "./result-submission.mjs";
 import { migrateStateV1ToV2 } from "./state-migration.mjs";
 import { renderTaskPrompt } from "./task-renderer.mjs";
 import { runOfflineAutopilot } from "./autopilot.mjs";
+import { runGeneralAutopilot } from "./general-autopilot.mjs";
 
 function option(args, name, fallback = null) { const index = args.indexOf(name); if (index === -1) return fallback; if (!args[index + 1] || args[index + 1].startsWith("--")) throw new Error(`MISSING_OPTION_VALUE:${name}`); return args[index + 1]; }
 function readJson(file) { return parseJsonStrict(fs.readFileSync(file, "utf8")); }
@@ -29,6 +30,15 @@ async function main(argv) {
     const runtimeRoot = option(argv, "--runtime"); if (!runtimeRoot) throw new Error("OFFLINE_AUTOPILOT_RUNTIME_REQUIRED");
     const source = option(argv, "--source", null);
     print(runOfflineAutopilot({ runtimeRoot: path.resolve(runtimeRoot), scenario: option(argv, "--scenario", "success"), sourceRoot: source === null ? null : path.resolve(source), controllerRoot: process.cwd(), expectedControllerCommit: option(argv, "--controller-commit", null) })); return;
+  }
+  if (command === "autopilot") {
+    if (argv.includes("--target") || argv.includes("--source") || argv.includes("--authority")) throw new Error("GENERAL_AUTOPILOT_PROTECTED_OVERRIDE_FORBIDDEN");
+    const runtimeRoot = option(argv, "--runtime"); if (!runtimeRoot) throw new Error("GENERAL_RUNTIME_REQUIRED");
+    const instruction = argv.filter((item, index) => index > 0 && item !== "--runtime" && argv[index - 1] !== "--runtime").join(" ").trim();
+    const result = await runGeneralAutopilot({ instruction, runtimeRoot: path.resolve(runtimeRoot) });
+    for (const line of result.trace) print(line + "\n");
+    print({ task: result.instruction, iterations: result.iterations, candidateCommit: result.candidateCommit, changedFiles: result.changedFiles, validation: result.validation.map((item) => ({ command: item.command, status: item.status })), analyst: result.analyst, architect: result.architect, state: result.status, branch: result.branch, deployment: false, integration: false });
+    return;
   }
   if (command === "rehearse") { const root = path.resolve(option(argv, "--runtime", `.runtime/rehearsal-${Date.now()}`)); print(await runRehearsal(root)); return; }
   if (command === "authorize-pilot") {
