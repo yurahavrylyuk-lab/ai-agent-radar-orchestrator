@@ -22,7 +22,7 @@ const MAX_ITERATIONS = 3;
 const MAX_ROLE_CALLS = 10;
 const MAX_ROLE_MS = 15 * 60 * 1000;
 const MAX_CYCLE_MS = 90 * 60 * 1000;
-const fail = (code) => { const error = new Error(code); error.code = code; throw error; };
+const fail = (code, details = {}) => { const error = new Error(code); error.code = code; Object.assign(error, details); throw error; };
 const FORBIDDEN_PATH = /(?:^|\/)\.env(?:\.|$)|(?:^|\/)(?:\.git|\.github|k8s|terraform|infra|secrets?)(?:\/|$)|(?:^|\/)(?:wrangler|cloudflare|docker-compose|compose|vercel|netlify|firebase)(?:\..+)?$|(?:^|\/)(?:Dockerfile|Procfile)$/iu;
 const SECRET_CONTENT = /(?:-----BEGIN (?:[A-Z ]+ )?PRIVATE KEY-----|(?:api[_ -]?key|secret|credential|password|token)\s*[:=]|(?:sk-(?:proj-|[A-Za-z0-9_-]))[A-Za-z0-9_-]{16,}|ghp_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|(?:AKIA|ASIA)[0-9A-Z]{16})/iu;
 function safePath(value) {
@@ -69,7 +69,19 @@ function parse(role, value) {
 function shell(command, root, profile, testMode, timeout, validationHome) {
   const env = { PATH: "/usr/bin:/bin:/usr/local/bin", HOME: validationHome.home, XDG_CONFIG_HOME: path.join(validationHome.home, ".config"), XDG_CACHE_HOME: path.join(validationHome.home, ".cache"), npm_config_update_notifier: "false", npm_config_cache: path.join(validationHome.home, "npm-cache"), npm_config_loglevel: "silent", TMPDIR: validationHome.tmp, TMP: validationHome.tmp, TEMP: validationHome.tmp };
   const result = testMode ? spawnSync("/bin/sh", ["-lc", command], { cwd: root, encoding: "utf8", env, timeout }) : spawnSync("/usr/bin/sandbox-exec", ["-p", profile, "/bin/sh", "-lc", command], { cwd: root, encoding: "utf8", env, timeout });
-  return { command, status: result.status, timedOut: result.error?.code === "ETIMEDOUT", output: (result.stdout + result.stderr).slice(0, 16000) };
+  return { command, status: result.status, timedOut: result.error?.code === "ETIMEDOUT", output: redactValidationOutput(result.stdout + result.stderr).slice(0, 16000) };
+}
+function redactValidationOutput(output) {
+  return output
+    .replace(/((?:anthropic_)?api[_ -]?key\s*[:=]\s*)[^\s'"`]+/giu, "$1[REDACTED]")
+    .replace(/((?:secret|credential|password|token)\s*[:=]\s*)[^\s'"`]+/giu, "$1[REDACTED]")
+    .replace(/\bsk-(?:proj-)?[A-Za-z0-9_-]{8,}\b/gu, "[REDACTED]")
+    .replace(/\b(?:ghp_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|(?:AKIA|ASIA)[0-9A-Z]{16})\b/gu, "[REDACTED]")
+    .replace(/-----BEGIN (?:[A-Z ]+ )?PRIVATE KEY-----[\s\S]*?(?:-----END (?:[A-Z ]+ )?PRIVATE KEY-----|$)/gu, "[REDACTED_PRIVATE_KEY]");
+}
+function failValidation(evidence) {
+  const failedValidations = evidence.map((item, index) => ({ step: index + 1, command: item.command, status: item.status, timedOut: item.timedOut, output: item.output })).filter((item) => item.status !== 0);
+  fail("GENERAL_VALIDATION_FAILED", { failedValidations });
 }
 function within(root, candidate) { const relative = path.relative(root, candidate); return relative === "" || (!relative.startsWith(`..${path.sep}`) && relative !== ".." && !path.isAbsolute(relative)); }
 function prepareValidationHome(workspace) {
@@ -240,7 +252,7 @@ async function runGeneralAutopilotCore({ instruction, runtimeRoot, transport, so
     if (!testMode && (executorOutput.confinement?.mechanism !== "MACOS_SANDBOX_CHECK" || executorOutput.confinement.policyDigest !== sandbox.digest || !Array.isArray(executorOutput.confinement.records) || executorOutput.confinement.records.length !== 14)) fail("GENERAL_BUILDER_CONFINEMENT_MISMATCH");
     executorConfinement.push(executorOutput.confinement);
     remaining(task); const checkpoint = createLocalCheckpoint({ statePath, ownerId, ownerGeneration: 1, taskId: task.taskId, now: now() }).receipt; remaining(task); candidate = checkpoint.candidateCommit; changes = changedFiles(workspace, setup.baseline, candidate); if (currentBranch(workspace) !== setup.branch) fail("GENERAL_WORKSPACE_BRANCH_MISMATCH");
-    const validationHome = prepareValidationHome(workspace); const validationProfile = offlineExecutorSandboxProfile({ workspaceRoot: workspace, validationHome: validationHome.home }).profile; const dependencyDigest = dependencyTreeDigest(path.join(workspace, "node_modules")); const evidence = VALIDATION.map((command) => shell(command, workspace, validationProfile, testMode && !sandboxedValidation, remaining(task), validationHome)); if (evidence.some((item) => item.timedOut)) haltForLimit({ statePath, ownerId, taskId: task.taskId, code: limitCode(task) }); cleanupValidationWorkspace(workspace, checkpoint.candidateCommit, validationHome); if (dependencyTreeDigest(path.join(workspace, "node_modules")) !== dependencyDigest) fail("GENERAL_DEPENDENCY_TREE_MUTATED"); remaining(task); verifyGeneralCandidate({ root: workspace, candidateCommit: checkpoint.candidateCommit, expectedParent: checkpoint.parentCommit, baselineCommit: setup.baseline, allowedPaths: task.plan.content.allowedChanges.map((item) => item.path), previousCandidate: iteration > 1 ? checkpoint.parentCommit : null }); remaining(task); validations.push(...evidence); if (evidence.some((item) => item.status !== 0)) fail("GENERAL_VALIDATION_FAILED"); trace.push("[VALIDATION] PASS");
+    const validationHome = prepareValidationHome(workspace); const validationProfile = offlineExecutorSandboxProfile({ workspaceRoot: workspace, validationHome: validationHome.home }).profile; const dependencyDigest = dependencyTreeDigest(path.join(workspace, "node_modules")); const evidence = VALIDATION.map((command) => shell(command, workspace, validationProfile, testMode && !sandboxedValidation, remaining(task), validationHome)); const timedOut = evidence.some((item) => item.timedOut); cleanupValidationWorkspace(workspace, checkpoint.candidateCommit, validationHome); if (dependencyTreeDigest(path.join(workspace, "node_modules")) !== dependencyDigest) fail("GENERAL_DEPENDENCY_TREE_MUTATED"); remaining(task); verifyGeneralCandidate({ root: workspace, candidateCommit: checkpoint.candidateCommit, expectedParent: checkpoint.parentCommit, baselineCommit: setup.baseline, allowedPaths: task.plan.content.allowedChanges.map((item) => item.path), previousCandidate: iteration > 1 ? checkpoint.parentCommit : null }); remaining(task); validations.push(...evidence); if (timedOut) haltForLimit({ statePath, ownerId, taskId: task.taskId, code: limitCode(task) }); if (evidence.some((item) => item.status !== 0)) failValidation(evidence); trace.push("[VALIDATION] PASS");
     state = readState(statePath); finish(task, started); complete(task, { candidateCommit: checkpoint.candidateCommit, parentCommit: checkpoint.parentCommit, treeId: checkpoint.treeId, changedFiles: task.plan.content.allowedChanges.map((item) => ({ ...item, mode: "100644" })), validation: validationEntries(state, task, evidence), deviations: [], blockers: [] });
     state = readState(statePath); task = state.tasks.find((item) => item.taskId === state.pendingTaskId); registerWorkspace({ statePath, ownerId, ownerGeneration: 1, taskId: task.taskId, workspace: { workspaceId: task.binding.workspaceId, role: "analyst", root: workspace, expectedCommit: candidate, registeredAt: now() } });
     started = begin(task); analyst = await runRole(task, "analyst", { instruction, plan: architect, candidate: { commit: candidate, changes }, validation: evidence }); trace.push("[ANALYST] " + analyst.decision); state = readState(statePath); finish(task, started); complete(task, { reviewedCommit: candidate, reviewState: analyst.decision, findings: analyst.findings, requiredChanges: analyst.findings, recommendations: [], validation: validationEntries(state, task, evidence) });

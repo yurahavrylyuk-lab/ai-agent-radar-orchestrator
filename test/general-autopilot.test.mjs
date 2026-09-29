@@ -62,6 +62,10 @@ function validationTempScripts(externalPath) {
   const worker = 'require("node:fs").writeFileSync("worker-configuration.d.ts","validation-generated\\n");process.stdout.write("temp-worker-ran\\n")';
   return { build: nodeScript(build), test: nodeScript(test), "worker:typecheck": nodeScript(worker) };
 }
+function failingValidationScripts(failedCommand, output = "validation stdout", stderr = "validation stderr") {
+  const command = (name) => nodeScript(`process.stdout.write(${JSON.stringify(output)}+"\\n");process.stderr.write(${JSON.stringify(stderr)}+"\\n");process.exit(${name === failedCommand ? 1 : 0})`);
+  return { build: command("npm run build"), test: command("npm test"), "worker:typecheck": command("npm run worker:typecheck") };
+}
 test("Claude Messages transport forces one schema-bound tool result", async () => {
   assert.throws(() => new ClaudeMessagesTransport({ apiKey: "" }), /GENERAL_ANTHROPIC_API_KEY_REQUIRED/u);
   const originalFetch = globalThis.fetch; let request;
@@ -135,6 +139,30 @@ test("sandboxed validation confines Node temporary directories to validation hom
   assert.equal(report.tmp, path.join(path.dirname(workspace), "validation-home", "tmp")); assert.equal(report.tmpdir, report.tmp); assert.equal(report.tmpEnv, report.tmp); assert.equal(report.tmpVariable, report.tmp); assert.equal(report.mode, 0o700); assert.equal(report.externalDenied, true);
   assert.equal(fs.existsSync(externalPath), false); assert.equal(fs.existsSync(path.join(path.dirname(workspace), "validation-home")), false);
   const status = statusPorcelain(workspace, { includeIgnored: true }).split("\0").filter(Boolean); assert.ok(status.length > 0 && status.every((entry) => entry.startsWith("!! node_modules/")));
+});
+test("validation failures report the reviewed command, bounded output, and redacted diagnostics", async () => {
+  for (const [command, step] of [["npm run build", 1], ["npm test", 2], ["npm run worker:typecheck", 3]]) {
+    const sourceRoot = fixture({ scripts: failingValidationScripts(command) }); const runtimeRoot = fs.mkdtempSync(path.join(os.tmpdir(), "general-runtime-")); fs.rmdirSync(runtimeRoot);
+    await assert.rejects(runGeneralAutopilotForTest({ instruction: "Create a smoke document.", runtimeRoot, sourceRoot, transport: transport() }), (error) => {
+      assert.equal(error.code, "GENERAL_VALIDATION_FAILED"); assert.deepEqual(error.failedValidations.map((item) => [item.step, item.command, item.status, item.timedOut]), [[step, command, 1, false]]); assert.match(error.failedValidations[0].output, /validation stdout/u); assert.match(error.failedValidations[0].output, /validation stderr/u); return true;
+    });
+  }
+  const sourceRoot = fixture({ scripts: failingValidationScripts("npm test", "x".repeat(17000)) }); const runtimeRoot = fs.mkdtempSync(path.join(os.tmpdir(), "general-runtime-")); fs.rmdirSync(runtimeRoot);
+  await assert.rejects(runGeneralAutopilotForTest({ instruction: "Create a smoke document.", runtimeRoot, sourceRoot, transport: transport() }), (error) => {
+    const diagnostic = error.failedValidations[0]; assert.equal(diagnostic.command, "npm test"); assert.ok(diagnostic.output.length <= 16000); return true;
+  });
+  const secretSource = fixture({ scripts: failingValidationScripts("npm test", "validation stdout", "ANTHROPIC_API_KEY=super-secret-value sk-proj-very-secret-value") }); const secretRuntime = fs.mkdtempSync(path.join(os.tmpdir(), "general-runtime-")); fs.rmdirSync(secretRuntime);
+  await assert.rejects(runGeneralAutopilotForTest({ instruction: "Create a smoke document.", runtimeRoot: secretRuntime, sourceRoot: secretSource, transport: transport() }), (error) => {
+    const diagnostic = error.failedValidations[0]; assert.match(diagnostic.output, /\[REDACTED\]/u); assert.doesNotMatch(diagnostic.output, /super-secret-value|sk-proj-very-secret-value/u); return true;
+  });
+  const pem = "x".repeat(15_900) + "-----BEGIN PRIVATE KEY-----\nprivate-key-material\n-----END PRIVATE KEY-----"; const pemSource = fixture({ scripts: failingValidationScripts("npm test", pem) }); const pemRuntime = fs.mkdtempSync(path.join(os.tmpdir(), "general-runtime-")); fs.rmdirSync(pemRuntime);
+  await assert.rejects(runGeneralAutopilotForTest({ instruction: "Create a smoke document.", runtimeRoot: pemRuntime, sourceRoot: pemSource, transport: transport() }), (error) => {
+    const diagnostic = error.failedValidations[0]; assert.ok(diagnostic.output.length <= 16000); assert.match(diagnostic.output, /\[REDACTED_PRIVATE_KEY\]/u); assert.doesNotMatch(diagnostic.output, /private-key-material|BEGIN PRIVATE KEY/u); return true;
+  });
+});
+test("validation timeout remains an execution-limit path after cleanup", () => {
+  const source = fs.readFileSync(new URL("../src/general-autopilot.mjs", import.meta.url), "utf8");
+  assert.match(source, /if \(timedOut\) haltForLimit\(\{ statePath, ownerId, taskId: task\.taskId, code: limitCode\(task\) \}\)/u);
 });
 test("validation fails closed on unexpected tracked or untracked output and dependency mutation", async () => {
   const cases = [
