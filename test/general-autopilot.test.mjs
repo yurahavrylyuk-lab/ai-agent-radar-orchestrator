@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import test from "node:test";
-import { runGeneralAutopilotForTest } from "../src/general-autopilot.mjs";
+import { ClaudeMessagesTransport, runGeneralAutopilotForTest } from "../src/general-autopilot.mjs";
 import { git } from "../src/git-evidence.mjs";
 import { offlineExecutorSandboxProfile } from "../src/operator-boundary.mjs";
 
@@ -31,6 +31,16 @@ function run(options = {}) {
   const sourceRoot = fixture(); const baseline = git(sourceRoot, ["rev-parse", "self-improvement"]).stdout.trim(); const runtimeRoot = fs.mkdtempSync(path.join(os.tmpdir(), "general-runtime-")); fs.rmdirSync(runtimeRoot);
   return runGeneralAutopilotForTest({ instruction: "Create a smoke document.", runtimeRoot, sourceRoot, transport: transport(options) }).then((result) => ({ ...result, sourceRoot, baseline }));
 }
+test("Claude Messages transport forces one schema-bound tool result", async () => {
+  assert.throws(() => new ClaudeMessagesTransport({ apiKey: "" }), /GENERAL_ANTHROPIC_API_KEY_REQUIRED/u);
+  const originalFetch = globalThis.fetch; let request;
+  globalThis.fetch = async (url, init) => { request = { url, init }; return { ok: true, status: 200, json: async () => ({ content: [{ type: "tool_use", name: "general_architect_result", input: { summary: "Add a document.", allowedPaths: ["docs/general-smoke.md"], plan: "Write one file.", acceptance: ["File exists."], constraints: [] } }] }) }; };
+  try {
+    const transport = new ClaudeMessagesTransport({ apiKey: "test-only-key" }); const result = await transport.complete({ role: "architect", input: { instruction: "Write a document." } });
+    assert.equal(request.url, "https://api.anthropic.com/v1/messages"); assert.equal(request.init.headers["x-api-key"], "test-only-key"); assert.equal(request.init.headers["anthropic-version"], "2023-06-01");
+    const body = JSON.parse(request.init.body); assert.equal(body.model, "claude-sonnet-4-6"); assert.deepEqual(body.tool_choice, { type: "tool", name: "general_architect_result" }); assert.deepEqual(result.allowedPaths, ["docs/general-smoke.md"]);
+  } finally { globalThis.fetch = originalFetch; }
+});
 
 test("general instruction automatically drives Architect, Builder, Analyst, and final Architect", async () => {
   const result = await run();

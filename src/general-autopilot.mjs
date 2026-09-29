@@ -94,8 +94,8 @@ async function role(transport, name, input, records, timeoutMs) {
   const controller = new AbortController(); const timeout = setTimeout(() => controller.abort(), timeoutMs);
   try { const value = parse(name, await transport.complete({ role: name, input, signal: controller.signal })); records.push({ role: name, value }); return value; } catch (error) { if (controller.signal.aborted) fail("GENERAL_ROLE_EXECUTION_LIMIT_EXCEEDED"); throw error; } finally { clearTimeout(timeout); }
 }
-export class OpenAIResponsesTransport {
-  constructor({ apiKey = process.env.OPENAI_API_KEY } = {}) { if (!apiKey) fail("GENERAL_OPENAI_API_KEY_REQUIRED"); this.apiKey = apiKey; this.model = "gpt-6-astra"; }
+export class ClaudeMessagesTransport {
+  constructor({ apiKey = process.env.ANTHROPIC_API_KEY, model = process.env.ANTHROPIC_MODEL || "claude-sonnet-4-6" } = {}) { if (!apiKey) fail("GENERAL_ANTHROPIC_API_KEY_REQUIRED"); this.apiKey = apiKey; this.model = model; }
   async complete({ role: name, input, signal }) {
     const schemas = {
       architect: { type: "object", additionalProperties: false, required: ["summary", "allowedPaths", "plan", "acceptance", "constraints"], properties: { summary: { type: "string" }, allowedPaths: { type: "array", items: { type: "string" } }, plan: { type: "string" }, acceptance: { type: "array", items: { type: "string" } }, constraints: { type: "array", items: { type: "string" } } } },
@@ -103,8 +103,11 @@ export class OpenAIResponsesTransport {
       analyst: { type: "object", additionalProperties: false, required: ["decision", "findings"], properties: { decision: { type: "string", enum: ["PASS", "REVISE"] }, findings: { type: "array", items: { type: "string" } } } },
       final: { type: "object", additionalProperties: false, required: ["decision", "rationale"], properties: { decision: { type: "string", enum: ["ACCEPT", "REJECT"] }, rationale: { type: "string" } } },
     };
-    const response = await fetch("https://api.openai.com/v1/responses", { method: "POST", signal, headers: { Authorization: "Bearer " + this.apiKey, "Content-Type": "application/json" }, body: JSON.stringify({ model: this.model, input: "Return only JSON. Role: " + name + ". Context: " + JSON.stringify(input), max_output_tokens: 4000, text: { format: { type: "json_schema", name: "general_" + name, strict: true, schema: schemas[name] } } }) });
-    if (!response.ok) fail("GENERAL_OPENAI_REQUEST_FAILED:" + response.status); const body = await response.json(); try { return JSON.parse(body.output_text); } catch { fail("GENERAL_OPENAI_RESPONSE_MALFORMED"); }
+    const toolName = "general_" + name + "_result";
+    const response = await fetch("https://api.anthropic.com/v1/messages", { method: "POST", signal, headers: { "x-api-key": this.apiKey, "anthropic-version": "2023-06-01", "Content-Type": "application/json" }, body: JSON.stringify({ model: this.model, max_tokens: 4000, messages: [{ role: "user", content: "Return the role result only through the required structured-result tool. Role: " + name + ". Context: " + JSON.stringify(input) }], tools: [{ name: toolName, description: "Return the validated General Instruction Autopilot role result.", input_schema: schemas[name] }], tool_choice: { type: "tool", name: toolName } }) });
+    if (!response.ok) fail("GENERAL_ANTHROPIC_REQUEST_FAILED:" + response.status); const body = await response.json(); const calls = Array.isArray(body.content) ? body.content.filter((item) => item?.type === "tool_use" && item.name === toolName) : [];
+    if (calls.length !== 1 || !calls[0].input || typeof calls[0].input !== "object" || Array.isArray(calls[0].input)) fail("GENERAL_ANTHROPIC_RESPONSE_MALFORMED");
+    return calls[0].input;
   }
 }
 function terminateCycle({ statePath, ownerId, taskId = null, code, stage = "FAILED" }) {
@@ -189,7 +192,7 @@ async function runGeneralAutopilotCore({ instruction, runtimeRoot, transport, so
     if (JSON.stringify(sourceAfter) !== JSON.stringify(sourceBefore)) fail("GENERAL_TARGET_MUTATED");
   }
 }
-export async function runGeneralAutopilot({ instruction, runtimeRoot, transport = new OpenAIResponsesTransport() }) {
+export async function runGeneralAutopilot({ instruction, runtimeRoot, transport = new ClaudeMessagesTransport() }) {
   const lock = acquireLock(GENERAL_SINGLETON_LOCK, { controllerId: "general-autopilot-v1", pid: process.pid });
   if (!lock.acquired) fail("GENERAL_AUTOPILOT_ACTIVE_CYCLE");
   try { return await runGeneralAutopilotCore({ instruction, runtimeRoot, transport, sourceRoot: GENERAL_TARGET_ROOT, testMode: false }); } finally { lock.release(); }

@@ -1,6 +1,6 @@
 # AI Agent Radar Offline Self-Improvement Controller
 
-This repository is a dependency-free governance controller. Phase 1 established the fail-closed offline prototype; GOV-002 Phase 2 adds human-assisted, data-only role handoffs and trusted Git operations that are enabled only for disposable fixture repositories. The bounded offline autopilot remains deterministic and provider-free. General Instruction Autopilot v1 is a separate, human-started path that uses one OpenAI Responses transport for structured role reasoning, an isolated AI Radar task branch, sandboxed local validation, and a non-mutating `READY_FOR_INTEGRATION` outcome.
+This repository is a dependency-free governance controller. Phase 1 established the fail-closed offline prototype; GOV-002 Phase 2 adds human-assisted, data-only role handoffs and trusted Git operations that are enabled only for disposable fixture repositories. The bounded offline autopilot remains deterministic and provider-free. General Instruction Autopilot v1 is a separate, human-started path that uses one Claude Platform Messages transport for structured role reasoning, an isolated AI Radar task branch, sandboxed local validation, and a non-mutating `READY_FOR_INTEGRATION` outcome.
 
 ## General Instruction Autopilot v1
 
@@ -11,8 +11,8 @@ npm run autopilot -- --runtime /private/tmp/ai-radar-general-run \
   "Create docs/autopilot-general-smoke.md with a short smoke-test description."
 ```
 
-The command requires `OPENAI_API_KEY` and uses the fixed `gpt-6-astra`
-model. It never accepts a
+The command requires `ANTHROPIC_API_KEY` and uses `claude-sonnet-4-6` by
+default; `ANTHROPIC_MODEL` may select a different Claude model. It never accepts a
 caller-selected target: it reads only the fixed AI Radar `self-improvement`
 branch, clones an isolated `autopilot/<task-id>` workspace, removes its
 remote, restricts the Builder to validated file writes, runs local build/test/
