@@ -6,16 +6,17 @@ import path from "node:path";
 import { spawnSync } from "node:child_process";
 import test from "node:test";
 import { ClaudeMessagesTransport, runGeneralAutopilotForTest } from "../src/general-autopilot.mjs";
-import { git } from "../src/git-evidence.mjs";
+import { git, statusPorcelain } from "../src/git-evidence.mjs";
 import { offlineExecutorSandboxProfile, PRODUCTION_AUTHORITY_ROOT, PRODUCTION_CONTROLLER_ROOT, PROTECTED_REAL_TARGET_ROOT } from "../src/operator-boundary.mjs";
 
-function fixture({ scripts = { build: "tsc", test: "node -e \"\"", "worker:typecheck": "tsc" }, dependencyLink = "relative" } = {}) {
+function fixture({ scripts = { build: "tsc", test: "node -e \"\"", "worker:typecheck": "tsc" }, dependencyLink = "relative", ignoredPaths = "node_modules/\n" } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "general-autopilot-"));
   git(root, ["init", "-b", "main"], { write: true });
   fs.writeFileSync(path.join(root, "package.json"), JSON.stringify({ scripts }));
   fs.writeFileSync(path.join(root, "package-lock.json"), JSON.stringify({ name: "general-autopilot-fixture", lockfileVersion: 3, requires: true, packages: {} }));
-  fs.writeFileSync(path.join(root, ".gitignore"), "node_modules/\n");
+  fs.writeFileSync(path.join(root, ".gitignore"), ignoredPaths);
   fs.writeFileSync(path.join(root, "README.md"), "fixture\n");
+  fs.writeFileSync(path.join(root, "worker-configuration.d.ts"), "declare const candidate: true;\n");
   git(root, ["add", "."], { write: true }); git(root, ["-c", "user.name=Fixture", "-c", "user.email=fixture@invalid", "commit", "--no-gpg-sign", "-m", "baseline"], { write: true });
   git(root, ["branch", "self-improvement"]); const typescriptTsc = path.join(root, "node_modules", "typescript", "bin", "tsc"); fs.mkdirSync(path.dirname(typescriptTsc), { recursive: true }); fs.writeFileSync(typescriptTsc, "#!/bin/sh\nexit 0\n", { mode: 0o755 }); fs.chmodSync(typescriptTsc, 0o755); const tsc = path.join(root, "node_modules", ".bin", "tsc"); fs.mkdirSync(path.dirname(tsc), { recursive: true }); fs.symlinkSync(dependencyLink === "relative" ? "../typescript/bin/tsc" : dependencyLink === "source-absolute" ? typescriptTsc : "/private/tmp", tsc);
   return root;
@@ -47,6 +48,13 @@ function transport({ revise = false, malformed = false } = {}) {
 function run(options = {}, sourceRoot = fixture()) {
   const baseline = git(sourceRoot, ["rev-parse", "self-improvement"]).stdout.trim(); const runtimeRoot = fs.mkdtempSync(path.join(os.tmpdir(), "general-runtime-")); fs.rmdirSync(runtimeRoot);
   return runGeneralAutopilotForTest({ instruction: "Create a smoke document.", runtimeRoot, sourceRoot, transport: transport(options) }).then((result) => ({ ...result, sourceRoot, baseline }));
+}
+function nodeScript(source) { return `node -e ${JSON.stringify(source)}`; }
+function hygieneScripts({ tracked = null, unexpected = null, mutateDependency = false } = {}) {
+  const build = 'const fs=require("node:fs");fs.mkdirSync("dist",{recursive:true});fs.writeFileSync("dist/output.js","generated");process.stdout.write("build-generated\\n")';
+  const test = 'const fs=require("node:fs"),path=require("node:path");const state=path.join(process.env.HOME,"Library","Preferences",".wrangler");fs.mkdirSync(state,{recursive:true});fs.writeFileSync(path.join(state,"metrics.json"),"state");process.stdout.write("test-generated\\n")';
+  const worker = `const fs=require("node:fs"),path=require("node:path");fs.writeFileSync("worker-configuration.d.ts","validation-generated\\n");${tracked ? `fs.writeFileSync(${JSON.stringify(tracked)},"unexpected\\n");` : ""}${unexpected ? `fs.mkdirSync(path.dirname(${JSON.stringify(unexpected)}),{recursive:true});fs.writeFileSync(${JSON.stringify(unexpected)},"unexpected\\n");` : ""}${mutateDependency ? 'fs.writeFileSync("node_modules/typescript/bin/tsc","mutated\\n");' : ""}process.stdout.write("worker-generated\\n")`;
+  return { build: nodeScript(build), test: nodeScript(test), "worker:typecheck": nodeScript(worker) };
 }
 test("Claude Messages transport forces one schema-bound tool result", async () => {
   assert.throws(() => new ClaudeMessagesTransport({ apiKey: "" }), /GENERAL_ANTHROPIC_API_KEY_REQUIRED/u);
@@ -95,6 +103,29 @@ test("dependency preparation rejects source and destination symlink escapes", as
   await assert.rejects(runGeneralAutopilotForTest({ instruction: "Create a smoke document.", runtimeRoot: destinationRuntime, sourceRoot: destinationEscape, transport: transport() }), /GENERAL_DEPENDENCY_SYMLINK_ESCAPE/u);
   const copiedEscape = path.join(destinationRuntime, "workspace", "node_modules", ".bin", "tsc");
   assert.equal(fs.realpathSync(copiedEscape), fs.realpathSync(path.join(destinationEscape, "node_modules", "typescript", "bin", "tsc")));
+});
+test("validation cleans only known generated effects and preserves evidence", async () => {
+  const sourceRoot = fixture({ scripts: hygieneScripts() }); const result = await run({}, sourceRoot); const workspace = path.dirname(result.dependencyPreparation.destination);
+  assert.deepEqual(result.validation.map((entry) => entry.command), ["npm run build", "npm test", "npm run worker:typecheck"]);
+  assert.match(result.validation[0].output, /build-generated/u); assert.match(result.validation[1].output, /test-generated/u); assert.match(result.validation[2].output, /worker-generated/u);
+  assert.equal(fs.existsSync(path.join(workspace, "dist")), false);
+  assert.equal(fs.existsSync(path.join(workspace, "Library")), false);
+  assert.equal(fs.existsSync(path.join(path.dirname(workspace), "validation-home")), false);
+  assert.equal(fs.readFileSync(path.join(workspace, "worker-configuration.d.ts"), "utf8"), git(workspace, ["show", `${result.candidateCommit}:worker-configuration.d.ts`]).stdout);
+  const status = statusPorcelain(workspace, { includeIgnored: true }).split("\0").filter(Boolean);
+  assert.ok(status.length > 0 && status.every((entry) => entry.startsWith("!! node_modules/")));
+});
+test("validation fails closed on unexpected tracked or untracked output and dependency mutation", async () => {
+  const cases = [
+    { scripts: hygieneScripts({ tracked: "README.md" }), ignoredPaths: "node_modules/\n", code: /GENERAL_VALIDATION_UNEXPECTED_WORKSPACE_MUTATION/u },
+    { scripts: hygieneScripts({ unexpected: "unexpected-untracked/output" }), ignoredPaths: "node_modules/\n", code: /GENERAL_VALIDATION_UNEXPECTED_WORKSPACE_MUTATION/u },
+    { scripts: hygieneScripts({ unexpected: "unexpected-ignored/output" }), ignoredPaths: "node_modules/\nunexpected-ignored/\n", code: /GENERAL_VALIDATION_UNEXPECTED_WORKSPACE_MUTATION/u },
+    { scripts: hygieneScripts({ mutateDependency: true }), ignoredPaths: "node_modules/\n", code: /GENERAL_DEPENDENCY_TREE_MUTATED/u },
+  ];
+  for (const item of cases) {
+    const sourceRoot = fixture({ scripts: item.scripts, ignoredPaths: item.ignoredPaths }); const runtimeRoot = fs.mkdtempSync(path.join(os.tmpdir(), "general-runtime-")); fs.rmdirSync(runtimeRoot);
+    await assert.rejects(runGeneralAutopilotForTest({ instruction: "Create a smoke document.", runtimeRoot, sourceRoot, transport: transport() }), item.code);
+  }
 });
 test("Analyst REVISE is returned directly to Builder iteration two", async () => {
   const result = await run({ revise: true });

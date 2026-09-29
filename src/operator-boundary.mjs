@@ -121,14 +121,20 @@ export function roleSandboxProfile({ authorityRoot, controllerRoot, targetRoot, 
   return Object.freeze({ profile, digest: sha256Canonical({ profile }), roots });
 }
 
-export function offlineExecutorSandboxProfile({ workspaceRoot }) {
-  const roots = Object.freeze({
+export function offlineExecutorSandboxProfile({ workspaceRoot, validationHome = null }) {
+  const roots = {
     authorityRoot: captureBoundaryRoot(PRODUCTION_AUTHORITY_ROOT, { name: "authorityRoot" }),
     controllerRoot: captureBoundaryRoot(PRODUCTION_CONTROLLER_ROOT, { name: "controllerRoot" }),
     targetRoot: captureBoundaryRoot(PROTECTED_REAL_TARGET_ROOT, { name: "targetRoot" }),
     workspaceRoot: captureBoundaryRoot(workspaceRoot, { name: "workspaceRoot" }),
-  });
+  };
+  if (validationHome !== null) roots.validationHomeRoot = captureBoundaryRoot(validationHome, { name: "validationHomeRoot" });
+  Object.freeze(roots);
   assertNoBoundaryOverlap({ ...roots, roleOutputRoot: roots.workspaceRoot });
+  if (roots.validationHomeRoot) {
+    assertNoBoundaryOverlap({ ...roots, roleOutputRoot: roots.validationHomeRoot });
+    if (isInsideOrEqual(roots.workspaceRoot.canonicalRoot, roots.validationHomeRoot.canonicalRoot) || isInsideOrEqual(roots.validationHomeRoot.canonicalRoot, roots.workspaceRoot.canonicalRoot)) throw new Error("VALIDATION_HOME_WORKSPACE_OVERLAP");
+  }
   const profile = [
     "(version 1)",
     "(allow default)",
@@ -138,7 +144,8 @@ export function offlineExecutorSandboxProfile({ workspaceRoot }) {
     `(deny file-write* (subpath ${quote(roots.controllerRoot.canonicalRoot)}))`,
     `(deny file-write* (subpath ${quote(roots.targetRoot.canonicalRoot)}))`,
     `(allow file-write* (subpath ${quote(roots.workspaceRoot.canonicalRoot)}))`,
-  ].join(" ");
+    roots.validationHomeRoot ? `(allow file-write* (subpath ${quote(roots.validationHomeRoot.canonicalRoot)}))` : null,
+  ].filter(Boolean).join(" ");
   return Object.freeze({ profile, digest: sha256Canonical({ profile }), roots });
 }
 

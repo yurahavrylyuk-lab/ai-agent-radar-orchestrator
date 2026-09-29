@@ -66,18 +66,44 @@ function parse(role, value) {
   else { exact(value, ["decision", "rationale"], "GENERAL_FINAL_SCHEMA"); if (!["ACCEPT", "REJECT"].includes(value.decision) || !safeText(value.rationale)) fail("GENERAL_FINAL_SCHEMA"); }
   return value;
 }
-function shell(command, root, profile, testMode, timeout) {
-  const env = { PATH: "/usr/bin:/bin:/usr/local/bin", HOME: root, npm_config_update_notifier: "false", npm_config_cache: path.join(root, ".autopilot-npm-cache"), npm_config_loglevel: "silent" };
+function shell(command, root, profile, testMode, timeout, validationHome) {
+  const env = { PATH: "/usr/bin:/bin:/usr/local/bin", HOME: validationHome, XDG_CONFIG_HOME: path.join(validationHome, ".config"), XDG_CACHE_HOME: path.join(validationHome, ".cache"), npm_config_update_notifier: "false", npm_config_cache: path.join(validationHome, "npm-cache"), npm_config_loglevel: "silent" };
   const result = testMode ? spawnSync("/bin/sh", ["-lc", command], { cwd: root, encoding: "utf8", env, timeout }) : spawnSync("/usr/bin/sandbox-exec", ["-p", profile, "/bin/sh", "-lc", command], { cwd: root, encoding: "utf8", env, timeout });
   return { command, status: result.status, timedOut: result.error?.code === "ETIMEDOUT", output: (result.stdout + result.stderr).slice(0, 16000) };
 }
-function removeValidationCache(workspace) {
-  const cache = path.join(workspace, ".autopilot-npm-cache");
-  if (!fs.existsSync(cache)) return;
-  const stat = fs.lstatSync(cache); if (!stat.isDirectory() || stat.isSymbolicLink()) fail("GENERAL_VALIDATION_CACHE_UNSAFE");
-  fs.rmSync(cache, { recursive: true, force: true });
-}
 function within(root, candidate) { const relative = path.relative(root, candidate); return relative === "" || (!relative.startsWith(`..${path.sep}`) && relative !== ".." && !path.isAbsolute(relative)); }
+function prepareValidationHome(workspace) {
+  const runtime = path.dirname(workspace); const runtimeStat = fs.lstatSync(runtime); if (!runtimeStat.isDirectory() || runtimeStat.isSymbolicLink()) fail("GENERAL_VALIDATION_RUNTIME_UNSAFE");
+  const requested = path.join(runtime, "validation-home"); try { fs.lstatSync(requested); fail("GENERAL_VALIDATION_HOME_PRESENT"); } catch (error) { if (error.code !== "ENOENT") throw error; }
+  fs.mkdirSync(requested, { mode: 0o700 }); const home = fs.realpathSync(requested);
+  if (!within(runtime, home) || within(workspace, home) || within(home, workspace)) fail("GENERAL_VALIDATION_HOME_UNSAFE");
+  return home;
+}
+function removeValidationHome(home, workspace) {
+  const runtime = path.dirname(workspace); const stat = fs.lstatSync(home);
+  if (!stat.isDirectory() || stat.isSymbolicLink() || !within(runtime, home) || within(workspace, home) || within(home, workspace)) fail("GENERAL_VALIDATION_HOME_UNSAFE");
+  fs.rmSync(home, { recursive: true, force: true });
+}
+function restoreValidationGeneratedFile(workspace, candidateCommit) {
+  const candidate = path.join(workspace, "worker-configuration.d.ts"); const stat = fs.lstatSync(candidate);
+  if (!stat.isFile() || stat.isSymbolicLink()) fail("GENERAL_VALIDATION_GENERATED_FILE_UNSAFE");
+  const expected = inspectGit(workspace, ["show", `${candidateCommit}:worker-configuration.d.ts`]).stdout;
+  fs.writeFileSync(candidate, expected, { mode: stat.mode & 0o777 });
+  if (!fs.readFileSync(candidate).equals(expected)) fail("GENERAL_VALIDATION_GENERATED_FILE_RESTORE_FAILED");
+}
+function cleanupValidationWorkspace(workspace, candidateCommit, validationHome) {
+  const entries = statusPorcelain(workspace, { includeIgnored: true }).split("\0").filter(Boolean); let generated = false; let dist = false;
+  for (const entry of entries) {
+    const pathname = entry.slice(3);
+    if (entry.startsWith("!! ") && (pathname === "node_modules/" || pathname.startsWith("node_modules/"))) continue;
+    if (entry === " M worker-configuration.d.ts") { generated = true; continue; }
+    if ((entry.startsWith("!! ") || entry.startsWith("?? ")) && (pathname === "dist/" || pathname.startsWith("dist/"))) { dist = true; continue; }
+    fail("GENERAL_VALIDATION_UNEXPECTED_WORKSPACE_MUTATION");
+  }
+  if (generated) restoreValidationGeneratedFile(workspace, candidateCommit);
+  if (dist) { const output = path.join(workspace, "dist"); const stat = fs.lstatSync(output); if (!stat.isDirectory() || stat.isSymbolicLink()) fail("GENERAL_VALIDATION_DIST_UNSAFE"); fs.rmSync(output, { recursive: true, force: true }); }
+  removeValidationHome(validationHome, workspace);
+}
 function verifyDependencyTree(root) {
   const rootStat = fs.lstatSync(root); if (!rootStat.isDirectory() || rootStat.isSymbolicLink()) fail("GENERAL_DEPENDENCY_TREE_UNSAFE");
   const canonicalRoot = fs.realpathSync(root);
@@ -212,7 +238,7 @@ async function runGeneralAutopilotCore({ instruction, runtimeRoot, transport, so
     if (!testMode && (executorOutput.confinement?.mechanism !== "MACOS_SANDBOX_CHECK" || executorOutput.confinement.policyDigest !== sandbox.digest || !Array.isArray(executorOutput.confinement.records) || executorOutput.confinement.records.length !== 14)) fail("GENERAL_BUILDER_CONFINEMENT_MISMATCH");
     executorConfinement.push(executorOutput.confinement);
     remaining(task); const checkpoint = createLocalCheckpoint({ statePath, ownerId, ownerGeneration: 1, taskId: task.taskId, now: now() }).receipt; remaining(task); candidate = checkpoint.candidateCommit; changes = changedFiles(workspace, setup.baseline, candidate); if (currentBranch(workspace) !== setup.branch) fail("GENERAL_WORKSPACE_BRANCH_MISMATCH");
-    const dependencyDigest = dependencyTreeDigest(path.join(workspace, "node_modules")); const evidence = VALIDATION.map((command) => shell(command, workspace, profile, testMode && !sandboxedValidation, remaining(task))); if (evidence.some((item) => item.timedOut)) haltForLimit({ statePath, ownerId, taskId: task.taskId, code: limitCode(task) }); removeValidationCache(workspace); if (dependencyTreeDigest(path.join(workspace, "node_modules")) !== dependencyDigest) fail("GENERAL_DEPENDENCY_TREE_MUTATED"); remaining(task); verifyGeneralCandidate({ root: workspace, candidateCommit: checkpoint.candidateCommit, expectedParent: checkpoint.parentCommit, baselineCommit: setup.baseline, allowedPaths: task.plan.content.allowedChanges.map((item) => item.path), previousCandidate: iteration > 1 ? checkpoint.parentCommit : null }); remaining(task); validations.push(...evidence); if (evidence.some((item) => item.status !== 0)) fail("GENERAL_VALIDATION_FAILED"); trace.push("[VALIDATION] PASS");
+    const validationHome = prepareValidationHome(workspace); const validationProfile = offlineExecutorSandboxProfile({ workspaceRoot: workspace, validationHome }).profile; const dependencyDigest = dependencyTreeDigest(path.join(workspace, "node_modules")); const evidence = VALIDATION.map((command) => shell(command, workspace, validationProfile, testMode && !sandboxedValidation, remaining(task), validationHome)); if (evidence.some((item) => item.timedOut)) haltForLimit({ statePath, ownerId, taskId: task.taskId, code: limitCode(task) }); cleanupValidationWorkspace(workspace, checkpoint.candidateCommit, validationHome); if (dependencyTreeDigest(path.join(workspace, "node_modules")) !== dependencyDigest) fail("GENERAL_DEPENDENCY_TREE_MUTATED"); remaining(task); verifyGeneralCandidate({ root: workspace, candidateCommit: checkpoint.candidateCommit, expectedParent: checkpoint.parentCommit, baselineCommit: setup.baseline, allowedPaths: task.plan.content.allowedChanges.map((item) => item.path), previousCandidate: iteration > 1 ? checkpoint.parentCommit : null }); remaining(task); validations.push(...evidence); if (evidence.some((item) => item.status !== 0)) fail("GENERAL_VALIDATION_FAILED"); trace.push("[VALIDATION] PASS");
     state = readState(statePath); finish(task, started); complete(task, { candidateCommit: checkpoint.candidateCommit, parentCommit: checkpoint.parentCommit, treeId: checkpoint.treeId, changedFiles: task.plan.content.allowedChanges.map((item) => ({ ...item, mode: "100644" })), validation: validationEntries(state, task, evidence), deviations: [], blockers: [] });
     state = readState(statePath); task = state.tasks.find((item) => item.taskId === state.pendingTaskId); registerWorkspace({ statePath, ownerId, ownerGeneration: 1, taskId: task.taskId, workspace: { workspaceId: task.binding.workspaceId, role: "analyst", root: workspace, expectedCommit: candidate, registeredAt: now() } });
     started = begin(task); analyst = await runRole(task, "analyst", { instruction, plan: architect, candidate: { commit: candidate, changes }, validation: evidence }); trace.push("[ANALYST] " + analyst.decision); state = readState(statePath); finish(task, started); complete(task, { reviewedCommit: candidate, reviewState: analyst.decision, findings: analyst.findings, requiredChanges: analyst.findings, recommendations: [], validation: validationEntries(state, task, evidence) });
