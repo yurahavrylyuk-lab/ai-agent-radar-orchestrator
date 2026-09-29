@@ -111,7 +111,9 @@ export const validators = Object.freeze({ request: validateRequest, cycle: valid
 
 const ROLES = ["architect", "builder", "analyst"];
 const PURPOSES = ["ARCHITECT_PLAN", "ARCHITECT_REVISION", "BUILDER_IMPLEMENTATION", "ANALYST_REVIEW", "ARCHITECT_FINAL_DECISION"];
-const EVIDENCE_MODES = ["SIMULATED", "HUMAN_ASSISTED", "OFFLINE_FIXTURE"];
+const EVIDENCE_MODES = ["SIMULATED", "HUMAN_ASSISTED", "OFFLINE_FIXTURE", "GENERAL_AUTOPILOT"];
+const GENERAL_AUTOPILOT_REPOSITORY_ID = "ai-radar-general-autopilot-v1";
+function generalAutopilotRepository(repositoryId) { return repositoryId === GENERAL_AUTOPILOT_REPOSITORY_ID; }
 const ANALYST_STATES = ["PASS", "PASS_WITH_RECOMMENDATIONS", "REVISE", "REJECT", "HUMAN_REVIEW_REQUIRED"];
 const ARCHITECT_DECISIONS = ["ACCEPT", "REVISE", "REJECT", "HUMAN_REVIEW"];
 const HEX40 = /^[0-9a-f]{40}$/u;
@@ -216,7 +218,9 @@ function validateLimits(value, name = "limits") {
   const fields = ["maxIterations", "maxExecutionSeconds", "maxCycleExecutionSeconds", "maxAdditionalCostUsd", "network", "providers", "publication", "scheduling"];
   exactRecord(value, fields, name);
   if (value.maxIterations !== PHASE2.maxIterations || value.maxExecutionSeconds !== PHASE2.maxExecutionSeconds || value.maxCycleExecutionSeconds !== PHASE2.maxCycleExecutionSeconds || value.maxAdditionalCostUsd !== 0) throw new TypeError(`${name} does not match fixed Phase 2 limits`);
-  for (const field of ["network", "providers", "publication", "scheduling"]) if (value[field] !== false) throw new TypeError(`${name}.${field} must be false`);
+  const general = value.network === true || value.providers === true;
+  if (general) { if (value.network !== true || value.providers !== true || value.publication !== false || value.scheduling !== false) throw new TypeError(`${name} general-autopilot capability mismatch`); }
+  else for (const field of ["network", "providers", "publication", "scheduling"]) if (value[field] !== false) throw new TypeError(`${name}.${field} must be false`);
 }
 function validateRolePurpose(role, purpose) {
   const expected = { architect: ["ARCHITECT_PLAN", "ARCHITECT_REVISION", "ARCHITECT_FINAL_DECISION"], builder: ["BUILDER_IMPLEMENTATION"], analyst: ["ANALYST_REVIEW"] };
@@ -256,7 +260,7 @@ function validateValidationEvidence(value, name) {
   const executed = value?.schemaVersion === 4;
   exactRecord(value, executed ? executedFields : humanFields, name);
   if (executed) {
-    if (value.evidenceType !== "CONTROLLER_EXECUTED_VALIDATION" || value.provenance !== "CONTROLLER_EXECUTED" || value.evidenceMode !== "OFFLINE_FIXTURE") throw new TypeError(`${name} executed type or provenance is invalid`);
+    if (value.evidenceType !== "CONTROLLER_EXECUTED_VALIDATION" || value.provenance !== "CONTROLLER_EXECUTED" || (value.evidenceMode !== "OFFLINE_FIXTURE" && !generalAutopilotRepository(value.repositoryId))) throw new TypeError(`${name} executed type or provenance is invalid`);
     oid(value.baselineCommit, `${name}.baselineCommit`); oid(value.treeId, `${name}.treeId`); oid(value.blobObjectId, `${name}.blobObjectId`); digest(value.blobDigest, `${name}.blobDigest`); if (value.mode !== "100644") throw new TypeError(`${name}.mode is invalid`); string(value.recipeVersion, `${name}.recipeVersion`); string(value.executionId, `${name}.executionId`); digest(value.detailsDigest, `${name}.detailsDigest`);
     if (scenarioEvidence) {
       if (!Array.isArray(value.candidateObjects) || value.candidateObjects.length !== 4) throw new TypeError(`${name}.candidateObjects is invalid`);
@@ -420,7 +424,7 @@ export function validateMachineStateV2(value) {
   string(value.controllerId, "machineStateV2.controllerId"); string(value.repositoryId, "machineStateV2.repositoryId"); oneOf(value.evidenceMode, EVIDENCE_MODES, "machineStateV2.evidenceMode"); integer(value.stateVersion, "machineStateV2.stateVersion");
   exactRecord(value.owner, ["id", "generation"], "machineStateV2.owner"); string(value.owner.id, "machineStateV2.owner.id"); integer(value.owner.generation, "machineStateV2.owner.generation", 1);
   if (value.activeCycleId !== null) string(value.activeCycleId, "machineStateV2.activeCycleId"); bool(value.humanHold, "machineStateV2.humanHold"); validateAuthorization(value.approval, "machineStateV2.approval");
-  exactRecord(value.capabilities, ["realPilotActivation", "liveProviders", "network", "publication", "scheduling"], "machineStateV2.capabilities"); for (const field of Object.keys(value.capabilities)) if (value.capabilities[field] !== false) throw new TypeError(`machineStateV2.capabilities.${field} must be false`);
+  exactRecord(value.capabilities, ["realPilotActivation", "liveProviders", "network", "publication", "scheduling"], "machineStateV2.capabilities"); const generalCapabilities = value.evidenceMode === "GENERAL_AUTOPILOT" && generalAutopilotRepository(value.repositoryId); for (const field of Object.keys(value.capabilities)) if (value.capabilities[field] !== (generalCapabilities && ["liveProviders", "network"].includes(field))) throw new TypeError(`machineStateV2.capabilities.${field} is invalid`);
   for (const field of ["queue", "cycles", "plans", "tasks", "results", "receipts", "iterations", "reviews", "summaries", "outbox", "workspaces", "timings", "checkpointIntents", "checkpointReceipts", "integrationIntents", "integrationOutcomes"]) if (!Array.isArray(value[field])) throw new TypeError(`machineStateV2.${field} must be an array`);
   if (value.migration === null) {
     value.cycles.forEach((cycle, index) => { const n = `cycles[${index}]`; exactRecord(cycle, ["id", "requestId", "status", "stage", "targetRoot", "targetBranch", "baselineCommit", "expectedTargetTip", "iterationBaseCommit", "iteration", "planRevision", "candidateCommit", "analystResultDigest", "architectDecision", "integrationStatus", "createdAt", "architectResultDigest"].filter((field) => field !== "architectResultDigest" || field in cycle), n); for (const field of ["id", "requestId", "status", "stage", "targetRoot", "targetBranch", "integrationStatus"]) string(cycle[field], `${n}.${field}`); const expectedBranch = value.evidenceMode === "OFFLINE_FIXTURE" && isAiRadarSearch10RepositoryId(value.repositoryId) ? AI_RADAR_SEARCH10_BRANCH : PHASE2.pilotBranch; if (cycle.targetBranch !== expectedBranch) throw new TypeError(`${n}.targetBranch must be ${expectedBranch}`); for (const field of ["baselineCommit", "expectedTargetTip", "iterationBaseCommit"]) oid(cycle[field], `${n}.${field}`); oid(cycle.candidateCommit, `${n}.candidateCommit`, true); digest(cycle.analystResultDigest, `${n}.analystResultDigest`, true); nullableString(cycle.architectDecision, `${n}.architectDecision`); integer(cycle.iteration, `${n}.iteration`, 1); if (cycle.iteration > 3) throw new TypeError(`${n}.iteration must be <= 3`); integer(cycle.planRevision, `${n}.planRevision`, 1); utcTimestamp(cycle.createdAt, `${n}.createdAt`); if ("architectResultDigest" in cycle) digest(cycle.architectResultDigest, `${n}.architectResultDigest`); });

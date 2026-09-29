@@ -8,18 +8,21 @@ import { createIndependentWorkspace } from "./workspaces.mjs";
 import { AI_RADAR_SEARCH10_BRANCH, isAiRadarSearch10RepositoryId } from "./scenarios/ai-radar-search10.mjs";
 
 export const REAL_TARGET_ROOT = "/Users/yuriy/Documents/IT Study/General/General/AI Agents/The AI Monitoring Agent";
+export const GENERAL_AUTOPILOT_REPOSITORY_ID = "ai-radar-general-autopilot-v1";
+export function isGeneralAutopilotRepositoryId(repositoryId) { return repositoryId === GENERAL_AUTOPILOT_REPOSITORY_ID; }
 
 export function isRealTarget(root) {
   try { return fs.realpathSync(root) === fs.realpathSync(REAL_TARGET_ROOT); } catch { return path.resolve(root) === path.resolve(REAL_TARGET_ROOT); }
 }
 
 export function createInitialState(config) {
-  if (isRealTarget(config.targetRoot) || config.realPilot === true || PHASE2.realPilotActivation) throw Object.assign(new Error("REAL_PILOT_NOT_AUTHORIZED"), { code: "REAL_PILOT_NOT_AUTHORIZED" });
+  const generalAutopilot = config.generalAutopilot === true && isGeneralAutopilotRepositoryId(config.repositoryId) && config.evidenceMode === "GENERAL_AUTOPILOT";
+  if ((!generalAutopilot && isRealTarget(config.targetRoot)) || config.realPilot === true || PHASE2.realPilotActivation) throw Object.assign(new Error("REAL_PILOT_NOT_AUTHORIZED"), { code: "REAL_PILOT_NOT_AUTHORIZED" });
   validateAuthorization(config.approval);
   const state = {
     schemaVersion: 2, controllerId: config.controllerId, repositoryId: config.repositoryId, evidenceMode: config.evidenceMode ?? "SIMULATED", stateVersion: 0,
     owner: { id: config.ownerId, generation: 1 }, queue: [], activeCycleId: null, humanHold: false, approval: structuredClone(config.approval),
-    capabilities: { realPilotActivation: false, liveProviders: false, network: false, publication: false, scheduling: false },
+    capabilities: { realPilotActivation: false, liveProviders: generalAutopilot, network: generalAutopilot, publication: false, scheduling: false },
     cycles: [], plans: [], tasks: [], pendingTaskId: null, results: [], receipts: [], iterations: [], reviews: [], summaries: [], outbox: [], workspaces: [], timings: [], checkpointIntents: [], checkpointReceipts: [], integrationIntents: [], integrationOutcomes: [], migration: null,
   };
   validateMachineStateV2(state); return state;
@@ -61,7 +64,7 @@ function validateEnqueueRequest(request) {
   if (!request || typeof request !== "object" || Array.isArray(request) || Object.keys(request).sort().join() !== fields.sort().join()) throw new TypeError("request fields are invalid");
   const expectedBranch = isAiRadarSearch10RepositoryId(request.repositoryId) ? AI_RADAR_SEARCH10_BRANCH : PHASE2.pilotBranch;
   if (request.schemaVersion !== 2 || typeof request.requestId !== "string" || request.repositoryId.length === 0 || request.targetBranch !== expectedBranch || !/^[0-9a-f]{40}$/u.test(request.baselineCommit) || !/^\d{4}-\d{2}-\d{2}T.*Z$/u.test(request.createdAt)) throw new TypeError("request is invalid");
-  if (isRealTarget(request.targetRoot)) throw Object.assign(new Error("REAL_PILOT_NOT_AUTHORIZED"), { code: "REAL_PILOT_NOT_AUTHORIZED" });
+  if (isRealTarget(request.targetRoot) && !isGeneralAutopilotRepositoryId(request.repositoryId)) throw Object.assign(new Error("REAL_PILOT_NOT_AUTHORIZED"), { code: "REAL_PILOT_NOT_AUTHORIZED" });
 }
 
 export function enqueueRequest({ statePath, ownerId, ownerGeneration, request, now = request.createdAt }) {

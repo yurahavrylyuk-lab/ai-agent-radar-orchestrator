@@ -11,8 +11,8 @@ npm run autopilot -- --runtime /private/tmp/ai-radar-general-run \
   "Create docs/autopilot-general-smoke.md with a short smoke-test description."
 ```
 
-The command requires `OPENAI_API_KEY` and optionally accepts
-`GENERAL_AUTOPILOT_MODEL` (default: `gpt-6-astra`). It never accepts a
+The command requires `OPENAI_API_KEY` and uses the fixed `gpt-6-astra`
+model. It never accepts a
 caller-selected target: it reads only the fixed AI Radar `self-improvement`
 branch, clones an isolated `autopilot/<task-id>` workspace, removes its
 remote, restricts the Builder to validated file writes, runs local build/test/

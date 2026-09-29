@@ -1,6 +1,7 @@
 import { PHASE2, ROLE_MODELS, canonicalJson, sha256Canonical } from "./contracts.mjs";
 import { resultContextForTask, validateRoleTask } from "./validate.mjs";
 import { expectedValidationEntries, requiredValidationEvidence } from "./validation-evidence.mjs";
+import { isGeneralAutopilotRepositoryId } from "./coordinator.mjs";
 
 const MODEL_REASONING = Object.freeze({ architect: "HIGH", builder: "MEDIUM", analyst: "HIGH" });
 
@@ -31,13 +32,13 @@ export function createRoleTask(input) {
       maxExecutionSeconds: PHASE2.maxExecutionSeconds,
       maxCycleExecutionSeconds: PHASE2.maxCycleExecutionSeconds,
       maxAdditionalCostUsd: PHASE2.maxAdditionalCostUsd,
-      network: false,
-      providers: false,
+      network: input.evidenceMode === "GENERAL_AUTOPILOT",
+      providers: input.evidenceMode === "GENERAL_AUTOPILOT",
       publication: false,
       scheduling: false,
     },
     createdAt: input.createdAt,
-    templateVersion: input.evidenceMode === "HUMAN_ASSISTED" ? "gov-002-activation-r1" : input.evidenceMode === "OFFLINE_FIXTURE" ? "gov-002-offline-autopilot-r1" : "gov-002-phase2-r3",
+    templateVersion: input.evidenceMode === "HUMAN_ASSISTED" ? "gov-002-activation-r1" : input.evidenceMode === "OFFLINE_FIXTURE" ? "gov-002-offline-autopilot-r1" : input.evidenceMode === "GENERAL_AUTOPILOT" ? "general-autopilot-v1" : "gov-002-phase2-r3",
   };
   task.taskDigest = sha256Canonical(task);
   validateRoleTask(task);
@@ -53,7 +54,7 @@ function payloadTemplate(task, state) {
   };
   if (task.purpose === "BUILDER_IMPLEMENTATION") {
     const checkpoint = state?.checkpointReceipts.find((item) => item.taskId === task.taskId) ?? null;
-    const changedFiles = task.repositoryId.startsWith("offline-repository:ai-radar-search10:") ? task.authorization.allowedChanges.map((item) => ({ ...item, mode: "100644" })) : [{ path: PHASE2.pilotPath, operation: task.iteration === 1 ? "ADD" : "MODIFY", mode: "100644" }];
+    const changedFiles = isGeneralAutopilotRepositoryId(task.repositoryId) ? task.plan.content.allowedChanges.map((item) => ({ ...item, mode: "100644" })) : task.repositoryId.startsWith("offline-repository:ai-radar-search10:") ? task.authorization.allowedChanges.map((item) => ({ ...item, mode: "100644" })) : [{ path: PHASE2.pilotPath, operation: task.iteration === 1 ? "ADD" : "MODIFY", mode: "100644" }];
     return { candidateCommit: checkpoint?.candidateCommit ?? null, parentCommit: checkpoint?.parentCommit ?? null, treeId: checkpoint?.treeId ?? null, changedFiles, validation, deviations: [], blockers: [] };
   }
   if (task.purpose === "ANALYST_REVIEW") return { reviewedCommit: task.binding.reviewedCommit, reviewState: "<PASS|PASS_WITH_RECOMMENDATIONS|REVISE|REJECT|HUMAN_REVIEW_REQUIRED>", findings: [], requiredChanges: [], recommendations: [], validation };

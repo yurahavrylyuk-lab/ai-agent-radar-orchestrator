@@ -19,6 +19,6 @@ test("real-target initialization is refused and creates no state", () => {
   const root = runtimeDirectory("cli-real-refusal"); const statePath = path.join(root, "state.json"); const configPath = path.join(root, "config.json"); fs.writeFileSync(configPath, JSON.stringify({ controllerId: "controller", repositoryId: "real", evidenceMode: "HUMAN_ASSISTED", ownerId: "owner", targetRoot: "/Users/yuriy/Documents/IT Study/General/General/AI Agents/The AI Monitoring Agent", approval })); const result = run(["init", "--state", statePath, "--file", configPath]); assert.equal(result.status, 2); assert.match(result.stderr, /REAL_PILOT_NOT_AUTHORIZED/); assert.equal(fs.existsSync(statePath), false);
 });
 test("Phase 2 source contains no provider, email, scheduler, deployment, or role-launch adapter", () => {
-  const files = fs.readdirSync("src").filter((name) => name.endsWith(".mjs")); const text = files.map((name) => fs.readFileSync(path.join("src", name), "utf8")).join("\n");
+  const files = fs.readdirSync("src").filter((name) => name.endsWith(".mjs") && name !== "general-autopilot.mjs"); const text = files.map((name) => fs.readFileSync(path.join("src", name), "utf8")).join("\n");
   for (const forbidden of ["api.openai.com", "generativelanguage.googleapis.com", "api.search.brave.com", "api.resend.com", "wrangler deploy", "scheduled("]) assert.equal(text.includes(forbidden), false, forbidden);
 });

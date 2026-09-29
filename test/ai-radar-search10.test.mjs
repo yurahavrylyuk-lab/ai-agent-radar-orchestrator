@@ -8,8 +8,9 @@ import { git, statusPorcelain } from "../src/git-evidence.mjs";
 
 function disposableClone() {
   const root = fs.mkdtempSync("/private/tmp/ai-radar-search10-unit-"); const repository = path.join(root, "repository");
-  git(root, ["clone", "--no-local", "--no-hardlinks", "--branch", AI_RADAR_SEARCH10_BRANCH, "--single-branch", AI_RADAR_PROTECTED_ROOT, repository], { write: true });
+  git(root, ["clone", "--no-local", "--no-hardlinks", "--no-checkout", AI_RADAR_PROTECTED_ROOT, repository], { write: true });
   git(repository, ["remote", "remove", "origin"], { write: true });
+  git(repository, ["switch", "-c", AI_RADAR_SEARCH10_BRANCH, AI_RADAR_SEARCH10_BASELINE], { write: true });
   return { root, repository };
 }
 

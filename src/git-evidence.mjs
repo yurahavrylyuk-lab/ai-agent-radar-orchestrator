@@ -101,6 +101,21 @@ export function verifyPilotCandidate({ root, candidateCommit, expectedParent, ba
   return { ...metadata, perIteration, cumulative, scopeDigest: sha256Canonical(cumulative) };
 }
 
+export function verifyGeneralCandidate({ root, candidateCommit, expectedParent, baselineCommit, allowedPaths, previousCandidate = null }) {
+  if (!Array.isArray(allowedPaths) || allowedPaths.length === 0 || new Set(allowedPaths).size !== allowedPaths.length) throw new Error("GENERAL_CANDIDATE_SCOPE_INVALID");
+  if (remotes(root).length !== 0) throw new Error("WORKSPACE_REMOTE_PRESENT");
+  if (alternates(root)) throw new Error("WORKSPACE_ALTERNATES_PRESENT");
+  if (statusPorcelain(root, { includeIgnored: true }) !== "") throw new Error("WORKSPACE_NOT_CLEAN");
+  const metadata = commitMetadata(root, candidateCommit);
+  if (metadata.parents.length !== 1 || metadata.parents[0] !== expectedParent) throw new Error("NONLINEAR_OR_WRONG_PARENT");
+  if (previousCandidate !== null && expectedParent !== previousCandidate) throw new Error("CORRECTIVE_PARENT_MISMATCH");
+  const perIteration = changedFiles(root, expectedParent, candidateCommit); const cumulative = changedFiles(root, baselineCommit, candidateCommit);
+  if (perIteration.length === 0 || perIteration.some((item) => !allowedPaths.includes(item.path) || !["A", "M"].includes(item.status) || item.newMode !== "100644")) throw new Error("GENERAL_ITERATION_SCOPE_VIOLATION");
+  if (cumulative.length === 0 || cumulative.some((item) => !allowedPaths.includes(item.path) || !["A", "M"].includes(item.status) || item.newMode !== "100644")) throw new Error("GENERAL_CUMULATIVE_SCOPE_VIOLATION");
+  for (const item of perIteration) { const stat = fs.lstatSync(path.join(root, item.path)); if (!stat.isFile() || stat.isSymbolicLink() || (stat.mode & 0o111) !== 0) throw new Error("GENERAL_FILE_TYPE_OR_MODE_VIOLATION"); }
+  return { ...metadata, perIteration, cumulative, scopeDigest: sha256Canonical(cumulative) };
+}
+
 export function validatePilotContent(content) {
   if (typeof content !== "string" || content.includes("\0")) throw new Error("PILOT_CONTENT_INVALID");
   const words = content.trim().split(/\s+/u).filter(Boolean); if (words.length > 800) throw new Error("PILOT_WORD_LIMIT_VIOLATION");

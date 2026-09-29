@@ -1,5 +1,5 @@
 import { canonicalJson, sha256Canonical } from "./contracts.mjs";
-import { buildTask, finalizeTerminalCycle, findCycle, summaryDigest } from "./coordinator.mjs";
+import { buildTask, finalizeTerminalCycle, findCycle, isGeneralAutopilotRepositoryId, summaryDigest } from "./coordinator.mjs";
 import { mutateStateV2 } from "./local-store.mjs";
 import { assertSubmissionTiming } from "./role-timing.mjs";
 import { validateRoleResultV2 } from "./validate.mjs";
@@ -9,6 +9,7 @@ function same(left, right) { return canonicalJson(left) === canonicalJson(right)
 function resultRecord(task, result, resultDigest, now) { return { taskId: task.taskId, taskDigest: task.taskDigest, cycleId: task.cycleId, role: task.role, purpose: task.purpose, resultDigest, result: structuredClone(result), acceptedAt: now }; }
 function receipt(task, resultDigest, stateVersion, now) { return { schemaVersion: 2, receiptId: `receipt:${task.taskId}`, taskId: task.taskId, taskDigest: task.taskDigest, resultDigest, acceptedAt: now, stateVersion, status: "ACCEPTED" }; }
 function approvedPlanPayload(payload, task) {
+  if (isGeneralAutopilotRepositoryId(task.repositoryId)) return payload;
   for (const field of ["scope", "allowedChanges", "forbiddenChanges", "acceptanceCriteria", "validationRequirements"]) if (!same(payload[field], task.authorization[field])) throw new Error(`ARCHITECT_PLAN_${field.toUpperCase()}_OUTSIDE_AUTHORIZATION`);
   return payload;
 }
@@ -17,6 +18,7 @@ function issue(state, cycle, purpose, now, binding = {}) {
 }
 function workspaceId(cycle, role) { return `${role}-${sha256Canonical({ cycleId: cycle.id, iteration: cycle.iteration, planRevision: cycle.planRevision, role }).slice(0, 20)}`; }
 function expectedBuilderChanges(task, cycle) {
+  if (isGeneralAutopilotRepositoryId(task.repositoryId)) return task.plan.content.allowedChanges.map((item) => ({ ...item, mode: "100644" }));
   if (task.repositoryId.startsWith("offline-repository:ai-radar-search10:")) return task.authorization.allowedChanges.map((item) => ({ ...item, mode: "100644" }));
   return [{ path: "docs/learning/offline-fixture-reading.md", operation: cycle.iteration === 1 ? "ADD" : "MODIFY", mode: "100644" }];
 }
@@ -59,11 +61,17 @@ export function submitRoleResult({ statePath, ownerId, ownerGeneration, result, 
         issue(state, cycle, "ANALYST_REVIEW", now, { candidateCommit: checkpoint.candidateCommit, reviewedCommit: checkpoint.candidateCommit, workspaceId: workspaceId(cycle, "analyst") }); break; }
       case "ANALYST_REVIEW": { const currentIteration = state.iterations.find((item) => item.cycleId === cycle.id && item.index === cycle.iteration); if (!currentIteration || currentIteration.candidateCommit !== result.payload.reviewedCommit) throw new Error("ANALYST_ITERATION_MISMATCH"); currentIteration.reviewResultDigest = resultDigest;
         addReviewBundle(state, cycle, task, result, resultDigest, now);
-        if (result.payload.reviewState === "REVISE" && cycle.iteration < 3) { cycle.planRevision += 1; issue(state, cycle, "ARCHITECT_REVISION", now, { candidateCommit: cycle.candidateCommit, reviewedCommit: cycle.candidateCommit }); }
+        if (result.payload.reviewState === "REVISE" && cycle.iteration < 3) {
+          if (isGeneralAutopilotRepositoryId(state.repositoryId)) { cycle.iteration += 1; cycle.iterationBaseCommit = cycle.candidateCommit; issue(state, cycle, "BUILDER_IMPLEMENTATION", now, { workspaceId: workspaceId(cycle, "builder") }); }
+          else { cycle.planRevision += 1; issue(state, cycle, "ARCHITECT_REVISION", now, { candidateCommit: cycle.candidateCommit, reviewedCommit: cycle.candidateCommit }); }
+        }
         else { if (["REJECT", "HUMAN_REVIEW_REQUIRED"].includes(result.payload.reviewState) || (result.payload.reviewState === "REVISE" && cycle.iteration === 3)) state.humanHold = true; issue(state, cycle, "ARCHITECT_FINAL_DECISION", now, { candidateCommit: cycle.candidateCommit, reviewedCommit: cycle.candidateCommit }); }
         break; }
       case "ARCHITECT_FINAL_DECISION": { if (result.payload.analystResultDigest !== cycle.analystResultDigest) throw new Error("ARCHITECT_DECISION_REVIEW_MISMATCH"); const latestReview = state.reviews.findLast((item) => item.cycleId === cycle.id); if (result.payload.decision === "ACCEPT" && !["PASS", "PASS_WITH_RECOMMENDATIONS"].includes(latestReview?.reviewState)) throw new Error("ARCHITECT_ACCEPT_WITHOUT_ANALYST_PASS"); if (result.payload.decision === "ACCEPT") { const analystTask = state.tasks.find((item) => item.taskId === latestReview?.id.replace(/^review:/u, "")); const analystResult = state.results.find((item) => item.taskId === analystTask?.taskId); if (!analystTask || !analystResult) throw new Error("ARCHITECT_ACCEPT_WITHOUT_VALIDATED_ANALYST_EVIDENCE"); validateRequiredValidationEvidence(state, analystTask, analystResult.result); } cycle.architectDecision = result.payload.decision; cycle.architectResultDigest = resultDigest;
-        if (result.payload.decision === "ACCEPT") { cycle.status = "REVIEW"; cycle.stage = "AWAITING_INTEGRATION"; }
+        if (result.payload.decision === "ACCEPT") {
+          if (isGeneralAutopilotRepositoryId(state.repositoryId)) { cycle.integrationStatus = "NOT_STARTED"; finalizeTerminalCycle(state, cycle, { status: "ACCEPTED", stage: "READY_FOR_INTEGRATION", terminalReason: "GENERAL_READY_FOR_INTEGRATION", now }); }
+          else { cycle.status = "REVIEW"; cycle.stage = "AWAITING_INTEGRATION"; }
+        }
         else { const terminalStatus = result.payload.decision === "REJECT" ? "REJECTED" : result.payload.decision === "HUMAN_REVIEW" ? "ESCALATED" : "HALTED"; finalizeTerminalCycle(state, cycle, { status: terminalStatus, stage: "DISPOSITION", terminalReason: `ARCHITECT_${result.payload.decision}`, now }); }
         break; }
       default: throw new Error("UNSUPPORTED_TASK_PURPOSE");

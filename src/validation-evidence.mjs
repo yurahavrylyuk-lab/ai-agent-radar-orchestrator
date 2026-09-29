@@ -4,6 +4,7 @@ import { changedFiles, commitMetadata, inspectGit } from "./git-evidence.mjs";
 import { OFFLINE_FIXTURE_TEMPLATE_VERSION, validateOfflineFixtureTemplate } from "./offline-fixture-content.mjs";
 import { resolveRegisteredWorkspace } from "./workspaces.mjs";
 import { inspectAiRadarSearch10Candidate, isAiRadarSearch10RepositoryId } from "./scenarios/ai-radar-search10.mjs";
+import { isGeneralAutopilotRepositoryId } from "./coordinator.mjs";
 
 const VALIDATED_PURPOSES = new Set(["BUILDER_IMPLEMENTATION", "ANALYST_REVIEW"]);
 const ATTESTED_OUTCOMES = new Set(["PASS", "FAIL"]);
@@ -167,6 +168,13 @@ export function validateRequiredValidationEvidence(state, task, result) {
       const expectedEntry = executedValidationEntries(state, task, entry.evidence.executionId).find((item) => item.recipeId === entry.recipeId);
       if (!expectedEntry || canonicalJson(entry) !== canonicalJson(expectedEntry)) throw new Error("VALIDATION_EVIDENCE_UNRESOLVABLE");
       if (requiresAllPass(task, result) && entry.outcome !== "PASS") throw new Error("REQUIRED_VALIDATION_DID_NOT_PASS");
+    }
+    return true;
+  }
+  if (isGeneralAutopilotRepositoryId(state.repositoryId)) {
+    for (const entry of submitted) {
+      const evidence = entry?.evidence;
+      if (entry.outcome !== "PASS" || entry.skipReason !== null || entry.evidenceDigest !== sha256Canonical(evidence) || !evidence || evidence.schemaVersion !== 4 || evidence.evidenceType !== "CONTROLLER_EXECUTED_VALIDATION" || evidence.provenance !== "CONTROLLER_EXECUTED" || evidence.repositoryId !== state.repositoryId || evidence.evidenceMode !== state.evidenceMode || evidence.candidateCommit !== candidateFor(task, checkpointFor(state, task))) throw new Error("GENERAL_EXECUTED_VALIDATION_REQUIRED");
     }
     return true;
   }
