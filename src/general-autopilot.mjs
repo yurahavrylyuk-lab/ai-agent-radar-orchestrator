@@ -22,6 +22,7 @@ const MAX_ITERATIONS = 3;
 const MAX_ROLE_CALLS = 10;
 const MAX_ROLE_MS = 15 * 60 * 1000;
 const MAX_CYCLE_MS = 90 * 60 * 1000;
+const ARCHITECT_FIELDS = Object.freeze(["summary", "allowedPaths", "plan", "acceptance", "constraints"]);
 const fail = (code, details = {}) => { const error = new Error(code); error.code = code; Object.assign(error, details); throw error; };
 const FORBIDDEN_PATH = /(?:^|\/)\.env(?:\.|$)|(?:^|\/)(?:\.git|\.github|k8s|terraform|infra|secrets?)(?:\/|$)|(?:^|\/)(?:wrangler|cloudflare|docker-compose|compose|vercel|netlify|firebase)(?:\..+)?$|(?:^|\/)(?:Dockerfile|Procfile)$/iu;
 const SECRET_CONTENT = /(?:-----BEGIN (?:[A-Z ]+ )?PRIVATE KEY-----|(?:api[_ -]?key|secret|credential|password|token)\s*[:=]|(?:sk-(?:proj-|[A-Za-z0-9_-]))[A-Za-z0-9_-]{16,}|ghp_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|(?:AKIA|ASIA)[0-9A-Z]{16})/iu;
@@ -60,6 +61,15 @@ function validationEntries(state, task, commands) {
 }
 function exact(value, fields, code) { if (!value || typeof value !== "object" || Array.isArray(value) || Object.keys(value).sort().join(",") !== [...fields].sort().join(",")) fail(code); }
 function architectSchemaFailure(reason, details = {}) { fail("GENERAL_ARCHITECT_SCHEMA", { schemaDiagnostics: { role: "architect", reason, ...details } }); }
+function architectSchemaRepair(diagnostic) {
+  const missing = Array.isArray(diagnostic?.missingFields) ? diagnostic.missingFields.filter((field) => ARCHITECT_FIELDS.includes(field)) : [];
+  const reason = typeof diagnostic?.reason === "string" && /^[A-Z_]+$/u.test(diagnostic.reason) ? diagnostic.reason : null; const field = ARCHITECT_FIELDS.includes(diagnostic?.field) ? diagnostic.field : null;
+  const lines = ["Your previous response did not match the required Architect schema.", ""];
+  if (missing.length !== 0) { lines.push("Missing fields:", ...missing.map((field) => "- " + field), ""); }
+  else if (reason !== null) { lines.push("Schema issue: " + reason + "."); if (field !== null) lines.push("Field: " + field + "."); lines.push(""); }
+  lines.push("Return exactly these five fields:", ...ARCHITECT_FIELDS, "", "Do not omit any field and do not add extra fields.");
+  return lines.join("\n");
+}
 function textSchemaReason(value) { if (typeof value !== "string") return "STRING_REQUIRED"; if (Buffer.byteLength(value) > 262144) return "MAX_BYTES_EXCEEDED"; if (!safeContent(value)) return "UNSAFE_CONTENT"; return null; }
 function architectStrings(field, value) {
   if (!Array.isArray(value)) architectSchemaFailure("ARRAY_REQUIRED", { field });
@@ -67,7 +77,7 @@ function architectStrings(field, value) {
 }
 function parse(role, value) {
   if (role === "architect") {
-    const fields = ["summary", "allowedPaths", "plan", "acceptance", "constraints"];
+    const fields = ARCHITECT_FIELDS;
     if (!value || typeof value !== "object" || Array.isArray(value)) architectSchemaFailure("OBJECT_REQUIRED");
     const keys = Object.keys(value); const missingFields = fields.filter((field) => !Object.hasOwn(value, field)); const unexpectedFieldCount = keys.filter((field) => !fields.includes(field)).length;
     if (missingFields.length !== 0 || unexpectedFieldCount !== 0 || keys.length !== fields.length) architectSchemaFailure("EXACT_FIELDS_REQUIRED", { missingFields, unexpectedFieldCount });
@@ -253,7 +263,15 @@ async function runGeneralAutopilotCore({ instruction, runtimeRoot, transport, so
     }
   };
   let state = readState(statePath); let task = state.tasks.find((item) => item.taskId === state.pendingTaskId);
-  let started = begin(task); const architect = await runRole(task, "architect", { instruction, structure: fs.readdirSync(workspace).filter((item) => !item.startsWith(".")).slice(0, 80), constraints: GENERAL_APPROVAL.forbiddenChanges }); finish(task, started); complete(task, planPayload(instruction, architect, workspace)); trace.push("[ARCHITECT] plan created");
+  const architectInput = { instruction, structure: fs.readdirSync(workspace).filter((item) => !item.startsWith(".")).slice(0, 80), constraints: GENERAL_APPROVAL.forbiddenChanges };
+  let started = begin(task); let architect;
+  try { architect = await runRole(task, "architect", architectInput); }
+  catch (error) {
+    if (error?.code !== "GENERAL_ARCHITECT_SCHEMA") throw error;
+    trace.push("[ARCHITECT] schema repair retry");
+    architect = await runRole(task, "architect", { ...architectInput, schemaRepair: architectSchemaRepair(error.schemaDiagnostics) });
+  }
+  finish(task, started); complete(task, planPayload(instruction, architect, workspace)); trace.push("[ARCHITECT] plan created");
   const sandbox = offlineExecutorSandboxProfile({ workspaceRoot: workspace }); const profile = sandbox.profile; const executorEnv = testMode
     ? { GENERAL_WORKSPACE_ROOT: workspace, GENERAL_TEST_CONFINEMENT: "1", PATH: "/usr/bin:/bin:/usr/local/bin", HOME: workspace }
     : { GENERAL_WORKSPACE_ROOT: workspace, GENERAL_BOUNDARY_ROOTS: JSON.stringify(Object.fromEntries(Object.entries(sandbox.roots).map(([name, root]) => [name, root.canonicalRoot]))), GENERAL_POLICY_DIGEST: sandbox.digest, PATH: "/usr/bin:/bin:/usr/local/bin", HOME: workspace };

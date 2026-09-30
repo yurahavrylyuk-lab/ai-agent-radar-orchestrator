@@ -45,6 +45,17 @@ function transport({ revise = false, malformed = false, architectResult = null }
     return { decision: "ACCEPT", rationale: "Validated candidate is acceptable." };
   }};
 }
+function retryTransport(architectResults) {
+  const calls = []; const results = [...architectResults];
+  return { calls, async complete({ role, input }) {
+    calls.push({ role, input: structuredClone(input) });
+    if (role === "architect") return results.shift();
+    if (role === "builder") return { summary: "Write the approved document.", actions: ["write docs/general-smoke.md"], files: [{ path: "docs/general-smoke.md", content: "# General smoke\n" }] };
+    if (role === "analyst") return { decision: "PASS", findings: [] };
+    return { decision: "ACCEPT", rationale: "Validated candidate is acceptable." };
+  }};
+}
+const validArchitectResult = Object.freeze({ summary: "Add a harmless document.", allowedPaths: ["docs/general-smoke.md"], plan: "Write one documentation file.", acceptance: ["File exists."], constraints: ["No deployment."] });
 function run(options = {}, sourceRoot = fixture()) {
   const baseline = git(sourceRoot, ["rev-parse", "self-improvement"]).stdout.trim(); const runtimeRoot = fs.mkdtempSync(path.join(os.tmpdir(), "general-runtime-")); fs.rmdirSync(runtimeRoot);
   return runGeneralAutopilotForTest({ instruction: "Create a smoke document.", runtimeRoot, sourceRoot, transport: transport(options) }).then((result) => ({ ...result, sourceRoot, baseline }));
@@ -83,7 +94,7 @@ test("Claude Messages transport forces one schema-bound tool result", async () =
   try {
     const transport = new ClaudeMessagesTransport({ apiKey: "test-only-key" }); const result = await transport.complete({ role: "architect", input: { instruction: "Write a document." } });
     assert.equal(request.url, "https://api.anthropic.com/v1/messages"); assert.equal(request.init.headers["x-api-key"], "test-only-key"); assert.equal(request.init.headers["anthropic-version"], "2023-06-01");
-    const body = JSON.parse(request.init.body); assert.equal(body.model, "claude-sonnet-4-6"); assert.deepEqual(body.tool_choice, { type: "tool", name: "general_architect_result" }); assert.equal(body.tools[0].input_schema.properties.plan.type, "string"); assert.match(body.tools[0].input_schema.properties.plan.description, /one implementation-oriented Markdown string/iu); assert.match(body.messages[0].content, /plan \(one Markdown string, never an array or object\)/u); assert.deepEqual(result.allowedPaths, ["docs/general-smoke.md"]);
+    const body = JSON.parse(request.init.body); assert.equal(body.model, "claude-sonnet-4-6"); assert.deepEqual(body.tool_choice, { type: "tool", name: "general_architect_result" }); assert.equal(body.tools[0].input_schema.additionalProperties, false); assert.deepEqual(body.tools[0].input_schema.required, ["summary", "allowedPaths", "plan", "acceptance", "constraints"]); assert.equal(body.tools[0].input_schema.properties.plan.type, "string"); assert.match(body.tools[0].input_schema.properties.plan.description, /one implementation-oriented Markdown string/iu); assert.match(body.messages[0].content, /plan \(one Markdown string, never an array or object\)/u); assert.deepEqual(result.allowedPaths, ["docs/general-smoke.md"]);
   } finally { globalThis.fetch = originalFetch; }
 });
 
@@ -112,6 +123,23 @@ test("Architect schema remains exact and returns safe field diagnostics", async 
   }
   const sourceRoot = fixture(); const runtimeRoot = fs.mkdtempSync(path.join(os.tmpdir(), "general-runtime-")); fs.rmdirSync(runtimeRoot);
   await assert.rejects(runGeneralAutopilotForTest({ instruction: "Create plan.md.", runtimeRoot, sourceRoot, transport: transport({ malformed: true }) }), (error) => error.code === "GENERAL_ARCHITECT_SCHEMA" && error.schemaDiagnostics.reason === "EXACT_FIELDS_REQUIRED");
+});
+
+test("Architect retries one safe schema repair and never makes a third Architect call", async () => {
+  const oneCallSource = fixture(); const oneCallRuntime = fs.mkdtempSync(path.join(os.tmpdir(), "general-runtime-")); fs.rmdirSync(oneCallRuntime); const oneCallTransport = retryTransport([validArchitectResult]);
+  const oneCallResult = await runGeneralAutopilotForTest({ instruction: "Create a smoke document.", runtimeRoot: oneCallRuntime, sourceRoot: oneCallSource, transport: oneCallTransport });
+  assert.equal(oneCallResult.status, "READY_FOR_INTEGRATION"); assert.equal(oneCallTransport.calls.filter((call) => call.role === "architect").length, 1);
+
+  for (const [missingFields, secret] of [[["acceptance"], "API_KEY=hidden-architect-payload"], [["constraints"], null], [["acceptance", "constraints"], null]]) {
+    const first = { ...validArchitectResult }; for (const field of missingFields) delete first[field]; if (secret !== null) first.summary = secret;
+    const sourceRoot = fixture(); const runtimeRoot = fs.mkdtempSync(path.join(os.tmpdir(), "general-runtime-")); fs.rmdirSync(runtimeRoot); const retry = retryTransport([first, validArchitectResult]);
+    const result = await runGeneralAutopilotForTest({ instruction: "Create a smoke document.", runtimeRoot, sourceRoot, transport: retry }); const architectCalls = retry.calls.filter((call) => call.role === "architect");
+    assert.equal(result.status, "READY_FOR_INTEGRATION"); assert.equal(architectCalls.length, 2); assert.match(architectCalls[1].input.schemaRepair, /Your previous response did not match the required Architect schema\./u); for (const field of missingFields) assert.match(architectCalls[1].input.schemaRepair, new RegExp(`^- ${field}$`, "mu")); assert.doesNotMatch(architectCalls[1].input.schemaRepair, /hidden-architect-payload|API_KEY/u); assert.deepEqual(result.records.map((record) => record.role), ["architect", "builder", "analyst", "final"]);
+  }
+
+  const firstInvalid = { ...validArchitectResult }; delete firstInvalid.acceptance; const secondInvalid = { ...validArchitectResult }; delete secondInvalid.constraints; const sourceRoot = fixture(); const runtimeRoot = fs.mkdtempSync(path.join(os.tmpdir(), "general-runtime-")); fs.rmdirSync(runtimeRoot); const failedRetry = retryTransport([firstInvalid, secondInvalid]);
+  await assert.rejects(runGeneralAutopilotForTest({ instruction: "Create a smoke document.", runtimeRoot, sourceRoot, transport: failedRetry }), (error) => error.code === "GENERAL_ARCHITECT_SCHEMA" && error.schemaDiagnostics.reason === "EXACT_FIELDS_REQUIRED" && error.schemaDiagnostics.missingFields.join(",") === "constraints");
+  assert.equal(failedRetry.calls.filter((call) => call.role === "architect").length, 2); assert.equal(failedRetry.calls.some((call) => call.role === "builder"), false);
 });
 
 test("general instruction automatically drives Architect, Builder, Analyst, and final Architect", async () => {
