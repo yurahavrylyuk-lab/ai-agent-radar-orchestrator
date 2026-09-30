@@ -59,8 +59,25 @@ function validationEntries(state, task, commands) {
   });
 }
 function exact(value, fields, code) { if (!value || typeof value !== "object" || Array.isArray(value) || Object.keys(value).sort().join(",") !== [...fields].sort().join(",")) fail(code); }
+function architectSchemaFailure(reason, details = {}) { fail("GENERAL_ARCHITECT_SCHEMA", { schemaDiagnostics: { role: "architect", reason, ...details } }); }
+function textSchemaReason(value) { if (typeof value !== "string") return "STRING_REQUIRED"; if (Buffer.byteLength(value) > 262144) return "MAX_BYTES_EXCEEDED"; if (!safeContent(value)) return "UNSAFE_CONTENT"; return null; }
+function architectStrings(field, value) {
+  if (!Array.isArray(value)) architectSchemaFailure("ARRAY_REQUIRED", { field });
+  for (let index = 0; index < value.length; index += 1) { const reason = textSchemaReason(value[index]); if (reason !== null) architectSchemaFailure(reason, { field, index }); }
+}
 function parse(role, value) {
-  if (role === "architect") { exact(value, ["summary", "allowedPaths", "plan", "acceptance", "constraints"], "GENERAL_ARCHITECT_SCHEMA"); if (!safeText(value.summary) || !safeText(value.plan) || !Array.isArray(value.allowedPaths) || value.allowedPaths.length === 0 || value.allowedPaths.length > 32 || new Set(value.allowedPaths).size !== value.allowedPaths.length || !value.allowedPaths.every(safePath) || !Array.isArray(value.acceptance) || !Array.isArray(value.constraints) || !value.acceptance.every(safeText) || !value.constraints.every(safeText)) fail("GENERAL_ARCHITECT_SCHEMA"); }
+  if (role === "architect") {
+    const fields = ["summary", "allowedPaths", "plan", "acceptance", "constraints"];
+    if (!value || typeof value !== "object" || Array.isArray(value)) architectSchemaFailure("OBJECT_REQUIRED");
+    const keys = Object.keys(value); const missingFields = fields.filter((field) => !Object.hasOwn(value, field)); const unexpectedFieldCount = keys.filter((field) => !fields.includes(field)).length;
+    if (missingFields.length !== 0 || unexpectedFieldCount !== 0 || keys.length !== fields.length) architectSchemaFailure("EXACT_FIELDS_REQUIRED", { missingFields, unexpectedFieldCount });
+    for (const field of ["summary", "plan"]) { const reason = textSchemaReason(value[field]); if (reason !== null) architectSchemaFailure(reason, { field }); }
+    if (!Array.isArray(value.allowedPaths)) architectSchemaFailure("ARRAY_REQUIRED", { field: "allowedPaths" });
+    if (value.allowedPaths.length === 0 || value.allowedPaths.length > 32) architectSchemaFailure("ITEM_COUNT_INVALID", { field: "allowedPaths" });
+    if (new Set(value.allowedPaths).size !== value.allowedPaths.length) architectSchemaFailure("DUPLICATE_PATH", { field: "allowedPaths" });
+    for (let index = 0; index < value.allowedPaths.length; index += 1) if (!safePath(value.allowedPaths[index])) architectSchemaFailure("SAFE_RELATIVE_PATH_REQUIRED", { field: "allowedPaths", index });
+    architectStrings("acceptance", value.acceptance); architectStrings("constraints", value.constraints);
+  }
   else if (role === "builder") { exact(value, ["summary", "actions", "files"], "GENERAL_BUILDER_SCHEMA"); if (!safeText(value.summary) || !Array.isArray(value.actions) || value.actions.some((item) => !safeText(item)) || !Array.isArray(value.files) || value.files.length === 0 || value.files.length > 32) fail("GENERAL_BUILDER_SCHEMA"); for (const file of value.files) if (!file || typeof file.path !== "string" || typeof file.content !== "string" || !safePath(file.path) || !safeContent(file.content) || Buffer.byteLength(file.content) > 262144) fail("GENERAL_BUILDER_FILE_INVALID"); }
   else if (role === "analyst") { exact(value, ["decision", "findings"], "GENERAL_ANALYST_SCHEMA"); if (!["PASS", "REVISE"].includes(value.decision) || !Array.isArray(value.findings) || value.findings.some((item) => !safeText(item))) fail("GENERAL_ANALYST_SCHEMA"); }
   else { exact(value, ["decision", "rationale"], "GENERAL_FINAL_SCHEMA"); if (!["ACCEPT", "REJECT"].includes(value.decision) || !safeText(value.rationale)) fail("GENERAL_FINAL_SCHEMA"); }
@@ -179,13 +196,14 @@ export class ClaudeMessagesTransport {
   constructor({ apiKey = process.env.ANTHROPIC_API_KEY, model = process.env.ANTHROPIC_MODEL || "claude-sonnet-4-6" } = {}) { if (!apiKey) fail("GENERAL_ANTHROPIC_API_KEY_REQUIRED"); this.apiKey = apiKey; this.model = model; }
   async complete({ role: name, input, signal }) {
     const schemas = {
-      architect: { type: "object", additionalProperties: false, required: ["summary", "allowedPaths", "plan", "acceptance", "constraints"], properties: { summary: { type: "string" }, allowedPaths: { type: "array", items: { type: "string" } }, plan: { type: "string" }, acceptance: { type: "array", items: { type: "string" } }, constraints: { type: "array", items: { type: "string" } } } },
+      architect: { type: "object", additionalProperties: false, required: ["summary", "allowedPaths", "plan", "acceptance", "constraints"], properties: { summary: { type: "string", minLength: 1, maxLength: 262144 }, allowedPaths: { type: "array", minItems: 1, maxItems: 32, uniqueItems: true, items: { type: "string", minLength: 1 } }, plan: { type: "string", minLength: 1, maxLength: 262144, description: "One implementation-oriented Markdown string. Do not return an array or object." }, acceptance: { type: "array", items: { type: "string" } }, constraints: { type: "array", items: { type: "string" } } } },
       builder: { type: "object", additionalProperties: false, required: ["summary", "actions", "files"], properties: { summary: { type: "string" }, actions: { type: "array", items: { type: "string" } }, files: { type: "array", items: { type: "object", additionalProperties: false, required: ["path", "content"], properties: { path: { type: "string" }, content: { type: "string" } } } } } },
       analyst: { type: "object", additionalProperties: false, required: ["decision", "findings"], properties: { decision: { type: "string", enum: ["PASS", "REVISE"] }, findings: { type: "array", items: { type: "string" } } } },
       final: { type: "object", additionalProperties: false, required: ["decision", "rationale"], properties: { decision: { type: "string", enum: ["ACCEPT", "REJECT"] }, rationale: { type: "string" } } },
     };
     const toolName = "general_" + name + "_result";
-    const response = await fetch("https://api.anthropic.com/v1/messages", { method: "POST", signal, headers: { "x-api-key": this.apiKey, "anthropic-version": "2023-06-01", "Content-Type": "application/json" }, body: JSON.stringify({ model: this.model, max_tokens: 4000, messages: [{ role: "user", content: "Return the role result only through the required structured-result tool. Role: " + name + ". Context: " + JSON.stringify(input) }], tools: [{ name: toolName, description: "Return the validated General Instruction Autopilot role result.", input_schema: schemas[name] }], tool_choice: { type: "tool", name: toolName } }) });
+    const architectInstructions = name === "architect" ? " Return exactly these fields and no others: summary (string), allowedPaths (non-empty array of safe relative paths), plan (one Markdown string, never an array or object), acceptance (array of strings), constraints (array of strings). Put prioritized steps and headings inside the single plan string; do not use a wrapper, code fence, or prose outside the tool input." : "";
+    const response = await fetch("https://api.anthropic.com/v1/messages", { method: "POST", signal, headers: { "x-api-key": this.apiKey, "anthropic-version": "2023-06-01", "Content-Type": "application/json" }, body: JSON.stringify({ model: this.model, max_tokens: 4000, messages: [{ role: "user", content: "Return the role result only through the required structured-result tool. Role: " + name + "." + architectInstructions + " Context: " + JSON.stringify(input) }], tools: [{ name: toolName, description: "Return the validated General Instruction Autopilot role result." + (name === "architect" ? " The plan field is one implementation-oriented Markdown string." : ""), input_schema: schemas[name] }], tool_choice: { type: "tool", name: toolName } }) });
     if (!response.ok) fail("GENERAL_ANTHROPIC_REQUEST_FAILED:" + response.status); const body = await response.json(); const calls = Array.isArray(body.content) ? body.content.filter((item) => item?.type === "tool_use" && item.name === toolName) : [];
     if (calls.length !== 1 || !calls[0].input || typeof calls[0].input !== "object" || Array.isArray(calls[0].input)) fail("GENERAL_ANTHROPIC_RESPONSE_MALFORMED");
     return calls[0].input;

@@ -35,12 +35,12 @@ function dependencySnapshot(root) {
   };
   visit(root); return JSON.stringify(records);
 }
-function transport({ revise = false, malformed = false } = {}) {
+function transport({ revise = false, malformed = false, architectResult = null } = {}) {
   let builder = 0; let analyst = 0;
   return { async complete({ role }) {
     if (malformed && role === "architect") return { nope: true };
-    if (role === "architect") return { summary: "Add a harmless document.", allowedPaths: ["docs/general-smoke.md"], plan: "Write one documentation file.", acceptance: ["File exists."], constraints: ["No deployment."] };
-    if (role === "builder") { builder += 1; return { summary: "Write the approved document.", actions: ["write docs/general-smoke.md"], files: [{ path: "docs/general-smoke.md", content: "# General smoke\n\nIteration " + builder + "\n" }] }; }
+    if (role === "architect") return architectResult ?? { summary: "Add a harmless document.", allowedPaths: ["docs/general-smoke.md"], plan: "Write one documentation file.", acceptance: ["File exists."], constraints: ["No deployment."] };
+    if (role === "builder") { builder += 1; const file = architectResult?.allowedPaths?.[0] ?? "docs/general-smoke.md"; return { summary: "Write the approved document.", actions: ["write " + file], files: [{ path: file, content: "# General smoke\n\nIteration " + builder + "\n" }] }; }
     if (role === "analyst") { analyst += 1; return revise && analyst === 1 ? { decision: "REVISE", findings: ["Clarify the document."] } : { decision: "PASS", findings: [] }; }
     return { decision: "ACCEPT", rationale: "Validated candidate is acceptable." };
   }};
@@ -83,8 +83,35 @@ test("Claude Messages transport forces one schema-bound tool result", async () =
   try {
     const transport = new ClaudeMessagesTransport({ apiKey: "test-only-key" }); const result = await transport.complete({ role: "architect", input: { instruction: "Write a document." } });
     assert.equal(request.url, "https://api.anthropic.com/v1/messages"); assert.equal(request.init.headers["x-api-key"], "test-only-key"); assert.equal(request.init.headers["anthropic-version"], "2023-06-01");
-    const body = JSON.parse(request.init.body); assert.equal(body.model, "claude-sonnet-4-6"); assert.deepEqual(body.tool_choice, { type: "tool", name: "general_architect_result" }); assert.deepEqual(result.allowedPaths, ["docs/general-smoke.md"]);
+    const body = JSON.parse(request.init.body); assert.equal(body.model, "claude-sonnet-4-6"); assert.deepEqual(body.tool_choice, { type: "tool", name: "general_architect_result" }); assert.equal(body.tools[0].input_schema.properties.plan.type, "string"); assert.match(body.tools[0].input_schema.properties.plan.description, /one implementation-oriented Markdown string/iu); assert.match(body.messages[0].content, /plan \(one Markdown string, never an array or object\)/u); assert.deepEqual(result.allowedPaths, ["docs/general-smoke.md"]);
   } finally { globalThis.fetch = originalFetch; }
+});
+
+test("Architect accepts the exact multi-part plan.md instruction as one structured plan", async () => {
+  const instruction = "Create plan.md for AI Agent Radar. Add this prioritized backlog: P0 Gemini 503 retry; P1 four-story daily email; P2 increase Brave Search limits to 100 per week and 350 per month, keeping the daily limit at 10; P3 broader AI and IT development coverage with priority for Codex and Claude Code; P4 fallback relevant-story email; P5 user feedback learning. Make plan.md structured and implementation-oriented.";
+  const plan = "# AI Agent Radar backlog\n\n## P0 — Gemini 503 retry\nDefine bounded retries and reporting.\n\n## P1 — Daily email\nSpecify four ranked stories.\n\n## P2 — Brave Search limits\nSet weekly 100 and monthly 350 while retaining daily 10.\n\n## P3 — Coverage\nPrioritize Codex and Claude Code.\n\n## P4 — Fallback email\nDescribe relevant-story fallback selection.\n\n## P5 — Feedback learning\nDescribe bounded user-feedback learning.\n" + "Implementation detail.\n".repeat(3000);
+  const architectResult = { summary: "Create an implementation-oriented AI Agent Radar backlog.", allowedPaths: ["plan.md"], plan, acceptance: ["plan.md lists P0 through P5 in priority order.", "The P2 limits preserve the daily limit of 10.", "The plan is implementation-oriented."], constraints: ["Do not implement runtime changes.", "Do not modify deployment or production configuration.", "Keep the change to plan.md."] };
+  const sourceRoot = fixture(); const runtimeRoot = fs.mkdtempSync(path.join(os.tmpdir(), "general-runtime-")); fs.rmdirSync(runtimeRoot);
+  const result = await runGeneralAutopilotForTest({ instruction, runtimeRoot, sourceRoot, transport: transport({ architectResult }) });
+  assert.equal(result.status, "READY_FOR_INTEGRATION"); assert.deepEqual(result.changedFiles, ["plan.md"]); assert.deepEqual(result.validation.map((entry) => entry.status), [0, 0, 0]);
+});
+
+test("Architect schema remains exact and returns safe field diagnostics", async () => {
+  const valid = { summary: "Create plan.", allowedPaths: ["plan.md"], plan: "# Plan\n", acceptance: ["Exists."], constraints: ["No deployment."] };
+  const cases = [
+    [{ ...valid, extra: "rejected" }, "EXACT_FIELDS_REQUIRED", { unexpectedFieldCount: 1 }],
+    [{ summary: valid.summary, allowedPaths: valid.allowedPaths, plan: valid.plan, acceptance: valid.acceptance }, "EXACT_FIELDS_REQUIRED", { missingFields: ["constraints"] }],
+    [{ ...valid, plan: ["not a string"] }, "STRING_REQUIRED", { field: "plan" }],
+    [{ ...valid, summary: "API_KEY=not-a-real-key" }, "UNSAFE_CONTENT", { field: "summary" }],
+  ];
+  for (const [architectResult, reason, expected] of cases) {
+    const sourceRoot = fixture(); const runtimeRoot = fs.mkdtempSync(path.join(os.tmpdir(), "general-runtime-")); fs.rmdirSync(runtimeRoot);
+    await assert.rejects(runGeneralAutopilotForTest({ instruction: "Create plan.md.", runtimeRoot, sourceRoot, transport: transport({ architectResult }) }), (error) => {
+      assert.equal(error.code, "GENERAL_ARCHITECT_SCHEMA"); assert.equal(error.schemaDiagnostics.role, "architect"); assert.equal(error.schemaDiagnostics.reason, reason); for (const [key, value] of Object.entries(expected)) assert.deepEqual(error.schemaDiagnostics[key], value); assert.doesNotMatch(JSON.stringify(error.schemaDiagnostics), /not-a-real-key/u); return true;
+    });
+  }
+  const sourceRoot = fixture(); const runtimeRoot = fs.mkdtempSync(path.join(os.tmpdir(), "general-runtime-")); fs.rmdirSync(runtimeRoot);
+  await assert.rejects(runGeneralAutopilotForTest({ instruction: "Create plan.md.", runtimeRoot, sourceRoot, transport: transport({ malformed: true }) }), (error) => error.code === "GENERAL_ARCHITECT_SCHEMA" && error.schemaDiagnostics.reason === "EXACT_FIELDS_REQUIRED");
 });
 
 test("general instruction automatically drives Architect, Builder, Analyst, and final Architect", async () => {

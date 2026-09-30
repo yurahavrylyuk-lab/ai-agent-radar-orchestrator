@@ -81,6 +81,7 @@ async function main(argv) {
 main(process.argv.slice(2)).catch((error) => {
   const safe = { error: error.code ?? error.message, message: error.message };
   if (Array.isArray(error.failedValidations)) safe.failedValidations = error.failedValidations;
+  if (error.schemaDiagnostics && typeof error.schemaDiagnostics === "object" && !Array.isArray(error.schemaDiagnostics)) safe.schemaDiagnostics = error.schemaDiagnostics;
   process.stderr.write(`${JSON.stringify(safe)}\n`);
   process.exitCode = /(?:HOLD|RECONCILIATION|UNCERTAIN)/u.test(safe.error) ? 3 : ["REAL_PILOT_NOT_AUTHORIZED", "UNKNOWN_COMMAND"].includes(safe.error) || /(?:INVALID|REQUIRED|WRONG|UNKNOWN|MISMATCH|CONFLICT|VIOLATION)/u.test(safe.error) ? 2 : 1;
 });
