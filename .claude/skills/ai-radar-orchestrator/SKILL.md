@@ -66,7 +66,7 @@ This rule is permanent and applies to every mode and phase.
    - DIRECT_TASK: no merge without explicit human approval.
    - SELF_IMPROVEMENT: approval before implementation and separate approval before merge.
    - Never deploy or modify Cloudflare production or secrets unless separately authorized.
-8. **GitHub main is authoritative.** Verify the latest GitHub main before development or merge work. Never overwrite newer remote work. Never force-push unless an explicitly approved workflow requires it.
+8. **GitHub main is authoritative.** Verify the latest GitHub main before development or merge work. Never overwrite newer remote work. Never force-push.
 
 ## Operating modes
 
