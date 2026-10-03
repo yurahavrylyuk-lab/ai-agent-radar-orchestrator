@@ -49,6 +49,25 @@ At the beginning of every DIRECT_TASK and every SELF_IMPROVEMENT analysis or imp
 
 This check is especially important when Codex, another Claude session, or another developer has changed main.
 
+## GitHub Publishing Rule
+
+This rule is permanent and applies to every mode and phase.
+
+1. **Local work uses Bash/git.** Use local Bash/git for normal development: `git status`, `git diff`, checkout, local branches, local commits, builds, tests, and validation.
+2. **Remote writes prefer GitHub MCP.** Prefer the configured GitHub MCP tools for remote GitHub write operations: publishing branches/commits when appropriate, creating/updating pull requests, merging pull requests (only after explicit approval), and other remote GitHub mutations.
+3. **Shell push failure.** If shell `git push` fails with 401, 403, an authentication failure, an authorization failure, or a branch-policy failure:
+   - do not repeatedly retry shell push;
+   - do not attempt credential discovery;
+   - switch immediately to GitHub MCP.
+4. **Forbidden inspection.** Never inspect, extract, probe, or attempt to recover: environment credentials, credential-helper secrets, SSH private keys or material, `/proc` environment data, vault contents, internal session IDs, or platform authentication internals.
+5. **GitHub MCP unavailable.** Stop the publishing phase immediately, preserve the completed local commit, and report the exact blocker. Do not spend Builder or Analyst iterations attempting to bypass authentication restrictions.
+6. **Retries.** Allow at most one retry, and only for a clearly transient GitHub/network/5xx error.
+7. **Approval boundaries are unchanged.**
+   - DIRECT_TASK: no merge without explicit human approval.
+   - SELF_IMPROVEMENT: approval before implementation and separate approval before merge.
+   - Never deploy or modify Cloudflare production or secrets unless separately authorized.
+8. **GitHub main is authoritative.** Verify the latest GitHub main before development or merge work. Never overwrite newer remote work. Never force-push unless an explicitly approved workflow requires it.
+
 ## Operating modes
 
 Every task runs in exactly one of two modes. Identify the mode from the user's instruction before doing any work.
@@ -61,7 +80,7 @@ The user gives a concrete implementation or change request.
 - Read backlog.md and plan.md when relevant.
 - Run Architect → Builder → Validation → Analyst.
 - Use a dedicated feature branch for the change (e.g. `claude/<short-description>`).
-- Push the implementation branch and open a PR to main.
+- Publish the implementation branch and open a PR to main, following the GitHub Publishing Rule.
 - Never merge without explicit user approval.
 - Never deploy unless separately authorized.
 
@@ -82,7 +101,7 @@ For every DIRECT_TASK perform these phases automatically:
 3. Validation
 4. Analyst
 5. Revision when required
-6. Push branch and open PR
+6. Publish branch and open PR (per GitHub Publishing Rule)
 7. Await explicit merge approval
 
 The user must not need to manually coordinate Architect, Builder, Validation, or Analyst phases.
@@ -166,7 +185,7 @@ If Analyst returns REVISE, fix only the identified findings and rerun validation
 
 Maximum 3 implementation iterations.
 
-Push only to `self-improvement`.
+Publish only to `self-improvement` (per the GitHub Publishing Rule).
 
 Open or update a PR from `self-improvement` to `main`.
 
